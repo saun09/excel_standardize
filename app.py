@@ -2,11 +2,7 @@ import streamlit as st
 import pandas as pd
 import re
 import unicodedata
-from io import StringIO
-
-from sentence_transformers import SentenceTransformer
-import hdbscan
-import numpy as np
+from collections import Counter
 
 # Session state initialization
 if "standardized" not in st.session_state:
@@ -59,27 +55,30 @@ def standardize_dataframe(df, string_cols):
         df[col] = df[col].apply(lambda x: standardize_value(x, col_name=col))
     return df
 
-def standardize_company_name(name):
-    name = str(name).lower()
-    name = re.sub(r'[^\w\s]', '', name)
-    name = re.sub(r'\s+', ' ', name).strip()
-    return name
+def infer_common_tokens(series, top_k=15):
+    tokens = []
+    for val in series.dropna():
+        val = re.sub(r'[^\w\s]', '', str(val)).lower()
+        tokens.extend(val.split())
+    counter = Counter(tokens)
+    common_tokens = [tok for tok, count in counter.items() if count > 1]
+    return sorted(common_tokens, key=counter.get, reverse=True)[:top_k]
 
-def cluster_company_names(names_std):
-    if len(names_std) < 2:
-        return [-1] * len(names_std)
-    model = SentenceTransformer('all-MiniLM-L6-v2')
-    embeddings = model.encode(names_std)
-    clusterer = hdbscan.HDBSCAN(min_cluster_size=2, metric='euclidean')
-    clusters = clusterer.fit_predict(embeddings)
-    return clusters
+def extract_primary_token(val):
+    if pd.isna(val):
+        return "MISC"
+    val = str(val).lower()
+    val = re.sub(r'[^\w\s]', ' ', val)  # Remove special chars
+    tokens = val.split()
+    skip_words = {'for', 'in', 'used', 'material', 'industry', 'binder', 'bulk', 'with', 'from'}
+    for tok in tokens:
+        if tok not in skip_words and len(tok) > 2 and any(c.isalpha() for c in tok):
+            return tok.upper()
+    return "MISC"
 
-def get_canonical_name(cluster_names):
-    return min(cluster_names, key=len)
 
 # --- Streamlit App ---
-
-st.title("Automatic String Column Standardizer + Company Name Clustering")
+st.title("Automatic String Column Standardizer + Token-Based Clustering")
 
 uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
 
@@ -97,50 +96,34 @@ if uploaded_file:
         st.session_state.df_clean = df_clean
         st.session_state.standardized = True
 
-    if st.session_state.standardized and st.session_state.df_clean is not None:
-        df_clean = st.session_state.df_clean
+if st.session_state.standardized and st.session_state.df_clean is not None:
+    df_clean = st.session_state.df_clean
 
-        st.subheader("Standardized Data Sample")
-        st.dataframe(df_clean.head(10))
+    st.subheader("Standardized Data Sample")
+    st.dataframe(df_clean.head(10))
 
-        string_cols = detect_string_columns(df_clean)
-        company_col = st.selectbox("Select Company Name Column for Clustering", options=string_cols)
+    string_cols = detect_string_columns(df_clean)
+    selected_col = st.selectbox("Select Column for Token-Based Clustering", options=string_cols)
 
-        if st.button("Cluster Company Names"):
-            with st.spinner("Clustering company names..."):
-                df_clean['company_std'] = df_clean[company_col].apply(standardize_company_name)
-                unique_names = df_clean['company_std'].dropna().unique().tolist()
-                clusters = cluster_company_names(unique_names)
+    if st.button("Auto Cluster by Tokens"):
+        with st.spinner("Inferring clusters based on frequent tokens..."):
+            common_tokens = infer_common_tokens(df_clean[selected_col], top_k=15)
+            df_clean['auto_cluster'] = df_clean[selected_col].apply(extract_primary_token)
 
-                cluster_dict = {}
-                for name, cluster_id in zip(unique_names, clusters):
-                    if cluster_id == -1:
-                        cluster_id = max(clusters) + 1 + len(cluster_dict)
-                    cluster_dict.setdefault(cluster_id, []).append(name)
 
-                canonical_mapping = {}
-                for cluster_id, names_list in cluster_dict.items():
-                    canonical = get_canonical_name(names_list)
-                    for n in names_list:
-                        canonical_mapping[n] = canonical
+            st.subheader("Top Tokens Used for Clustering")
+            st.write(common_tokens)
 
-                df_clean['company_canonical'] = df_clean['company_std'].map(canonical_mapping)
+            st.subheader("Cluster Summary")
+            st.dataframe(df_clean['auto_cluster'].value_counts().reset_index().rename(columns={'index': 'Cluster', 'auto_cluster': 'Count'}))
 
-                st.subheader("Company Name Clusters and Canonical Names")
-                cluster_summary = pd.DataFrame(
-                    [(cid, ', '.join(names[:5]) + ('...' if len(names) > 5 else ''), get_canonical_name(names), len(names))
-                     for cid, names in cluster_dict.items()],
-                    columns=['Cluster ID', 'Sample Names', 'Canonical Name', 'Count']
-                )
-                st.dataframe(cluster_summary)
+            st.subheader("Data Sample with Cluster Labels")
+            st.dataframe(df_clean[[selected_col, 'auto_cluster']].head(20))
 
-                st.subheader("Data Sample with Canonical Company Name")
-                st.dataframe(df_clean[[company_col, 'company_canonical']].head(20))
-
-                csv = df_clean.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="Download CSV with Canonical Company Names",
-                    data=csv,
-                    file_name="standardized_and_clustered.csv",
-                    mime="text/csv"
-                )
+            csv = df_clean.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="Download CSV with Auto Clusters",
+                data=csv,
+                file_name="token_based_clustered.csv",
+                mime="text/csv"
+            )
