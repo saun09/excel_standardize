@@ -39,8 +39,167 @@ def detect_string_columns(df):
             string_cols.append(col)
     return string_cols
 
+def detect_numeric_columns(df):
+    """Detect columns that likely contain numeric data (quantities, prices, etc.)"""
+    numeric_cols = []
+    for col in df.columns:
+        if pd.api.types.is_numeric_dtype(df[col]):
+            numeric_cols.append(col)
+        else:
+            # Check if column contains numeric-like strings
+            sample_values = df[col].dropna().astype(str).head(100)
+            numeric_count = 0
+            for val in sample_values:
+                # Remove common non-numeric characters and check if remainder is numeric
+                cleaned = re.sub(r'[,$\s]', '', str(val))
+                try:
+                    float(cleaned)
+                    numeric_count += 1
+                except:
+                    pass
+            
+            if numeric_count / len(sample_values) > 0.7:  # 70% numeric-like values
+                numeric_cols.append(col)
+    
+    return numeric_cols
+
+def detect_categorical_columns(df, exclude_clusters=True):
+    """Detect columns suitable for grouping/categorization"""
+    categorical_cols = []
+    for col in df.columns:
+        if exclude_clusters and '_cluster' in col:
+            continue
+        
+        # Skip numeric columns
+        if pd.api.types.is_numeric_dtype(df[col]):
+            continue
+            
+        # Check unique value ratio
+        unique_ratio = df[col].nunique() / len(df)
+        
+        # Good categorical columns have reasonable number of unique values
+        if 0.01 <= unique_ratio <= 0.3:  # Between 1% and 30% unique values
+            categorical_cols.append(col)
+    
+    return categorical_cols
+
+def safe_numeric_conversion(series):
+    """Safely convert a series to numeric, handling common formats"""
+    def convert_value(val):
+        if pd.isna(val):
+            return 0
+        
+        val_str = str(val).strip()
+        
+        # Remove common non-numeric characters
+        cleaned = re.sub(r'[,$\s]', '', val_str)
+        
+        try:
+            return float(cleaned)
+        except:
+            return 0
+    
+    return series.apply(convert_value)
+
 def convert_df_to_csv_bytes(df):
     return df.to_csv(index=False).encode('utf-8')
+    """Perform various types of analysis on clustered data"""
+    
+    if cluster_col not in df.columns:
+        return None, "Cluster column not found"
+    
+    # Filter by selected clusters if specified
+    if selected_clusters:
+        df_filtered = df[df[cluster_col].isin(selected_clusters)]
+    else:
+        df_filtered = df
+    
+    if df_filtered.empty:
+        return None, "No data found for selected clusters"
+    
+    try:
+        if analysis_type == "cluster_summary":
+            # Basic cluster summary
+            result = df_filtered.groupby(cluster_col).agg({
+                cluster_col: 'count'
+            }).rename(columns={cluster_col: 'Total_Records'})
+            
+            if target_col and target_col in df_filtered.columns:
+                numeric_data = safe_numeric_conversion(df_filtered[target_col])
+                df_temp = df_filtered.copy()
+                df_temp[f'{target_col}_numeric'] = numeric_data
+                
+                summary = df_temp.groupby(cluster_col)[f'{target_col}_numeric'].agg([
+                    'sum', 'mean', 'count'
+                ]).round(2)
+                summary.columns = [f'{target_col}_Total', f'{target_col}_Average', f'{target_col}_Count']
+                
+                result = pd.concat([result, summary], axis=1)
+            
+            return result, "Analysis completed successfully"
+        
+        elif analysis_type == "top_clusters":
+            if not target_col or target_col not in df_filtered.columns:
+                return None, "Target column required for top clusters analysis"
+            
+            numeric_data = safe_numeric_conversion(df_filtered[target_col])
+            df_temp = df_filtered.copy()
+            df_temp[f'{target_col}_numeric'] = numeric_data
+            
+            result = df_temp.groupby(cluster_col)[f'{target_col}_numeric'].sum().sort_values(ascending=False).head(10)
+            result = result.to_frame(f'Total_{target_col}')
+            
+            return result, "Top clusters analysis completed"
+        
+        elif analysis_type == "cluster_by_category":
+            if not group_by_col or group_by_col not in df_filtered.columns:
+                return None, "Group by column required for categorical analysis"
+            
+            if target_col and target_col in df_filtered.columns:
+                numeric_data = safe_numeric_conversion(df_filtered[target_col])
+                df_temp = df_filtered.copy()
+                df_temp[f'{target_col}_numeric'] = numeric_data
+                
+                result = df_temp.groupby([cluster_col, group_by_col])[f'{target_col}_numeric'].sum().unstack(fill_value=0)
+            else:
+                result = df_filtered.groupby([cluster_col, group_by_col]).size().unstack(fill_value=0)
+            
+            return result, "Categorical analysis completed"
+        
+        elif analysis_type == "detailed_breakdown":
+            if not group_by_col or group_by_col not in df_filtered.columns:
+                return None, "Group by column required for detailed breakdown"
+            
+            result_list = []
+            
+            for cluster in df_filtered[cluster_col].unique():
+                cluster_data = df_filtered[df_filtered[cluster_col] == cluster]
+                
+                breakdown = cluster_data.groupby(group_by_col).agg({
+                    cluster_col: 'count'
+                }).rename(columns={cluster_col: 'Record_Count'})
+                
+                if target_col and target_col in df_filtered.columns:
+                    numeric_data = safe_numeric_conversion(cluster_data[target_col])
+                    cluster_data_temp = cluster_data.copy()
+                    cluster_data_temp[f'{target_col}_numeric'] = numeric_data
+                    
+                    summary = cluster_data_temp.groupby(group_by_col)[f'{target_col}_numeric'].sum()
+                    breakdown[f'Total_{target_col}'] = summary
+                
+                breakdown['Cluster'] = cluster
+                result_list.append(breakdown.reset_index())
+            
+            if result_list:
+                result = pd.concat(result_list, ignore_index=True)
+                return result, "Detailed breakdown completed"
+            else:
+                return None, "No data to analyze"
+        
+    except Exception as e:
+        return None, f"Analysis error: {str(e)}"
+    
+    return None, "Unknown analysis type"
 
 def clean_pin(value):
     if pd.isna(value):
@@ -368,6 +527,125 @@ if 'df_clustered' in st.session_state:
         st.write("- **Cluster_Summary** sheet: Summary of clusters with counts")
         st.write("**Cluster Distribution:**")
         st.dataframe(preview_data.head(10))
+
+    # DATA ANALYTICS SECTION
+    st.subheader("📊 Data Analytics & Insights")
+    st.write("Query your clustered data to get analytical insights:")
+    
+    # Detect column types for better user experience
+    numeric_cols = detect_numeric_columns(df_clustered)
+    categorical_cols = detect_categorical_columns(df_clustered)
+    
+    # Analytics interface
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**Available Numeric Columns (for calculations):**")
+        st.write(numeric_cols if numeric_cols else "No numeric columns detected")
+        
+    with col2:
+        st.write("**Available Categorical Columns (for grouping):**")
+        st.write(categorical_cols if categorical_cols else "No categorical columns detected")
+    
+    # Analysis type selection
+    analysis_type = st.selectbox(
+        "Select Analysis Type:",
+        [
+            "cluster_summary",
+            "top_clusters", 
+            "cluster_by_category",
+            "detailed_breakdown"
+        ],
+        format_func=lambda x: {
+            "cluster_summary": "📈 Cluster Summary (Total records, sums, averages)",
+            "top_clusters": "🏆 Top Clusters (Ranked by selected metric)",
+            "cluster_by_category": "📊 Cross-Analysis (Clusters vs Categories)",
+            "detailed_breakdown": "🔍 Detailed Breakdown (Complete analysis by category)"
+        }[x]
+    )
+    
+    # Dynamic input fields based on analysis type
+    target_col = None
+    group_by_col = None
+    selected_clusters = None
+    
+    if analysis_type in ["cluster_summary", "top_clusters", "cluster_by_category", "detailed_breakdown"]:
+        if numeric_cols:
+            target_col = st.selectbox(
+                "Select Numeric Column for Calculations (optional):",
+                ["None"] + numeric_cols
+            )
+            target_col = None if target_col == "None" else target_col
+    
+    if analysis_type in ["cluster_by_category", "detailed_breakdown"]:
+        if categorical_cols:
+            group_by_col = st.selectbox(
+                "Group By Column:",
+                categorical_cols
+            )
+    
+    # Cluster selection
+    all_clusters = sorted(df_clustered[cluster_col].unique())
+    selected_clusters = st.multiselect(
+        "Select Specific Clusters (leave empty for all):",
+        all_clusters,
+        default=[]
+    )
+    
+    if not selected_clusters:
+        selected_clusters = None
+    
+    # Run analysis button
+    if st.button("🔍 Run Analysis", key="run_analysis"):
+        with st.spinner("Analyzing data..."):
+            result, message = perform_cluster_analysis(
+                df_clustered, 
+                cluster_col, 
+                analysis_type, 
+                target_col, 
+                group_by_col, 
+                selected_clusters
+            )
+            
+            if result is not None:
+                st.success(message)
+                st.subheader("Analysis Results")
+                st.dataframe(result)
+                
+                # Download results
+                csv_results = result.to_csv().encode('utf-8')
+                st.download_button(
+                    label="📥 Download Analysis Results",
+                    data=csv_results,
+                    file_name=f"analysis_{analysis_type}.csv",
+                    mime="text/csv"
+                )
+                
+                # Store results in session state
+                st.session_state['analysis_results'] = result
+                st.session_state['analysis_type'] = analysis_type
+                
+            else:
+                st.error(f"Analysis failed: {message}")
+    
+    # Quick insights section
+    if 'analysis_results' in st.session_state:
+        st.subheader("💡 Quick Insights")
+        result = st.session_state['analysis_results']
+        analysis_type = st.session_state['analysis_type']
+        
+        if analysis_type == "cluster_summary":
+            st.write(f"**Total Clusters Analyzed:** {len(result)}")
+            if 'Total_Records' in result.columns:
+                st.write(f"**Largest Cluster:** {result['Total_Records'].idxmax()} ({result['Total_Records'].max()} records)")
+            
+            if target_col and f'{target_col}_Total' in result.columns:
+                st.write(f"**Highest {target_col} Total:** {result[f'{target_col}_Total'].idxmax()} ({result[f'{target_col}_Total'].max():,.2f})")
+        
+        elif analysis_type == "top_clusters":
+            st.write(f"**Top Performing Cluster:** {result.index[0]} ({result.iloc[0, 0]:,.2f})")
+            st.write(f"**Bottom Performing Cluster:** {result.index[-1]} ({result.iloc[-1, 0]:,.2f})")
+
 
 st.subheader("How Clustering Works")
 st.write("""
