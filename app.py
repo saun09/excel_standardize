@@ -128,7 +128,7 @@ def group_data(df, group_by_columns, aggregation_rules=None):
         st.error(f"Error during grouping: {str(e)}")
         return df
     
-    
+
 def convert_df_to_csv_bytes(df):
     return df.to_csv(index=False).encode('utf-8')
 
@@ -676,4 +676,69 @@ if 'df_clustered' in st.session_state:
             st.write(f"**Top Performing Cluster:** {result.index[0]} ({result.iloc[0, 0]:,.2f})")
             st.write(f"**Bottom Performing Cluster:** {result.index[-1]} ({result.iloc[-1, 0]:,.2f})")
 
-
+    # DATA GROUPING SECTION
+    st.subheader("📊 Data Grouping")
+    st.write("Group your data by categorical columns to analyze patterns:")
+    
+    # Grouping interface
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Multiselect for grouping columns
+        group_by_cols = st.multiselect(
+            "Select columns to group by:",
+            categorical_cols,
+            default=[]
+        )
+    
+    with col2:
+        # Select numeric column to aggregate (optional)
+        agg_col = st.selectbox(
+            "Select numeric column to aggregate (optional):",
+            ["None"] + numeric_cols,
+            key="agg_col_select"
+        )
+        
+        # Select aggregation function
+        agg_func = st.selectbox(
+            "Select aggregation function:",
+            ["count", "sum", "mean", "median", "min", "max"],
+            disabled=(agg_col == "None"),
+            key="agg_func_select"
+        )
+    
+    # Prepare aggregation rules
+    aggregation_rules = None
+    if agg_col != "None":
+        aggregation_rules = {agg_col: agg_func}
+    
+    if st.button("🔢 Group Data", key="group_data_button"):
+        if not group_by_cols:
+            st.warning("Please select at least one column to group by")
+        else:
+            with st.spinner("Grouping data..."):
+                grouped_df = group_data(df_clustered, group_by_cols, aggregation_rules)
+                
+                st.subheader("Grouped Data Results")
+                st.dataframe(grouped_df.head(50))
+                
+                # Download results
+                csv_grouped = grouped_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Grouped Data",
+                    data=csv_grouped,
+                    file_name="grouped_data.csv",
+                    mime="text/csv"
+                )
+                
+                # Store results in session state
+                st.session_state['grouped_data'] = grouped_df
+                st.session_state['group_by_cols'] = group_by_cols
+                
+                # Show quick summary
+                st.subheader("💡 Quick Insights")
+                st.write(f"Data grouped by: {', '.join(group_by_cols)}")
+                if agg_col != "None":
+                    st.write(f"Aggregated column: {agg_col} ({agg_func})")
+                    st.write(f"Total {agg_col}: {grouped_df[agg_col].sum():,.2f}")
+                st.write(f"Number of groups: {len(grouped_df)}")
