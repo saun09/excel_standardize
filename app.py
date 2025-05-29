@@ -2,45 +2,21 @@ import streamlit as st
 import pandas as pd
 import re
 import unicodedata
-from collections import Counter
 import io
-# Add imports for clustering
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.cluster import DBSCAN
 import random
 
-# Helper function to generate distinct colors
+# ---------- Helper Functions ----------
+
 def generate_colors(n):
     random.seed(42)
-    colors = []
-    for _ in range(n):
-        colors.append("#"+"".join([random.choice('0123456789ABCDEF') for _ in range(6)]))
-    return colors
-
-def color_clusters(s, cluster_colors):
-    # s is a Series of cluster labels
-    return ['background-color: {}'.format(cluster_colors.get(x, '#FFFFFF')) for x in s]
-
-# Session state initialization
-if "standardized" not in st.session_state:
-    st.session_state.standardized = False
-if "df_clean" not in st.session_state:
-    st.session_state.df_clean = None
-
-email_pattern = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
-
-def is_email(value):
-    value = str(value).strip()
-    return bool(email_pattern.match(value))
+    return ["#" + ''.join(random.choices('0123456789ABCDEF', k=6)) for _ in range(n)]
 
 def detect_string_columns(df):
     string_cols = []
     for col in df.columns:
         series = df[col].dropna()
-        has_text = series.astype(str).apply(lambda x: any(c.isalpha() for c in x)).any()
-        contains_email = series.astype(str).map(is_email).any()
-        is_numeric = pd.api.types.is_numeric_dtype(df[col])
-        if has_text and not contains_email and not is_numeric:
+        if (series.astype(str).apply(lambda x: any(c.isalpha() for c in x)).any() 
+            and not pd.api.types.is_numeric_dtype(df[col])):
             string_cols.append(col)
     return string_cols
 
@@ -55,9 +31,7 @@ def clean_pin(value):
 def standardize_value(val, col_name=""):
     if pd.isna(val):
         return val
-    val_str = str(val)
-    if val_str.strip() == "":
-        return val_str
+    val_str = str(val).strip()
     if "pin" in col_name.lower():
         return clean_pin(val)
     val_str = unicodedata.normalize('NFKD', val_str).encode('ascii', 'ignore').decode('utf-8')
@@ -71,36 +45,9 @@ def standardize_dataframe(df, string_cols):
         df[col] = df[col].apply(lambda x: standardize_value(x, col_name=col))
     return df
 
-def infer_common_tokens(series, top_k=15):
-    tokens = []
-    for val in series.dropna():
-        val = re.sub(r'[^\w\s]', '', str(val)).lower()
-        tokens.extend(val.split())
-    counter = Counter(tokens)
-    common_tokens = [tok for tok, count in counter.items() if count > 1]
-    return sorted(common_tokens, key=counter.get, reverse=True)[:top_k]
+# ---------- App Title and Upload ----------
 
-def extract_primary_token(val):
-    if pd.isna(val):
-        return "MISC"
-    val = str(val).lower()
-    val = re.sub(r'[^\w\s]', ' ', val)
-    tokens = val.split()
-    skip_words = {'for', 'in', 'used', 'material', 'industry', 'binder', 'bulk', 'with', 'from'}
-    for tok in tokens:
-        if tok not in skip_words and len(tok) > 2 and any(c.isalpha() for c in tok):
-            return tok.upper()
-    return "MISC"
-
-def tokenize_string(val):
-    if pd.isna(val):
-        return []
-    val = val.lower()
-    val = re.sub(r'[^\w\s]', ' ', val)
-    tokens = val.split()
-    stopwords = {'for', 'in', 'used', 'material', 'industry', 'binder', 'bulk', 'with', 'from'}
-    return [t for t in tokens if t not in stopwords and len(t) > 2]
-st.title("Automatic String Column Standardizer + Token-Based Clustering")
+st.title("String Standardization + Exact Match Clustering")
 
 uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
 
@@ -110,99 +57,91 @@ if uploaded_file:
     st.dataframe(df.head(10))
 
     string_cols = detect_string_columns(df)
-    st.write(f"Detected string columns to standardize ({len(string_cols)}):")
-    st.write(string_cols)
+    st.write(f"Detected string columns to standardize: {string_cols}")
 
     if st.button("Standardize String Columns"):
-        df_clean = standardize_dataframe(df, string_cols)
-        st.session_state.df_clean = df_clean
+        st.session_state.df_clean = standardize_dataframe(df, string_cols)
         st.session_state.standardized = True
 
-if st.session_state.standardized and st.session_state.df_clean is not None:
+# ---------- Exact Match Clustering + Normalized Search ----------
+
+import string
+def normalize_for_clustering(val):
+    if pd.isna(val):
+        return "MISSING"
+    val = str(val).lower()
+    val = re.sub(r'[^\w\s]', '', val)  # remove punctuation
+    val = re.sub(r'\s+', ' ', val)     # normalize whitespace
+    val = val.replace(" ", "")         # remove all spaces for tighter matching
+    return val.strip()
+
+def normalize_cluster_name(name):
+    if pd.isna(name):
+        return "UNKNOWN"
+    name = str(name).lower().strip()
+
+    # Remove batch numbers (like b210119101 etc.)
+    name = re.sub(r'\bb\d{9}\b', '', name)
+
+    # Remove extra punctuation and normalize spaces
+    name = name.translate(str.maketrans('', '', string.punctuation))
+    name = re.sub(r'\s+', ' ', name).strip()
+    
+    return name
+
+if st.session_state.get("standardized") and st.session_state.get("df_clean") is not None:
     df_clean = st.session_state.df_clean
 
     st.subheader("Standardized Data Sample")
     st.dataframe(df_clean.head(10))
 
     string_cols = detect_string_columns(df_clean)
-    selected_col = st.selectbox("Select Column for Token-Based Clustering", options=string_cols)
+    selected_col = st.selectbox("Select column for clustering", string_cols)
 
-    # Your old token clustering button here (unchanged) ...
+    if st.button("Exact Match Clustering"):
+        df_clean['exact_cluster'] = df_clean[selected_col].apply(normalize_for_clustering)
 
-    if st.button("Nuanced Clustering by TF-IDF + DBSCAN"):
-        with st.spinner("Performing nuanced clustering..."):
-            df_clean['tokens_str'] = df_clean[selected_col].apply(lambda x: ' '.join(tokenize_string(x)))
+        # Add normalized cluster column
+        df_clean['normalized_cluster'] = df_clean['exact_cluster'].apply(normalize_cluster_name)
 
-            vectorizer = TfidfVectorizer()
-            X = vectorizer.fit_transform(df_clean['tokens_str'])
+        # Create mapping normalized_cluster -> list of exact_cluster(s)
+        cluster_map = df_clean.groupby('normalized_cluster')['exact_cluster'].agg(lambda x: list(set(x))).to_dict()
+        normalized_options = sorted(cluster_map.keys())
 
-            clustering_model = DBSCAN(eps=0.5, min_samples=2, metric='cosine')
-            clusters = clustering_model.fit_predict(X)
+        st.subheader("Exact Match Cluster Summary")
+        st.dataframe(df_clean['exact_cluster'].value_counts().reset_index().rename(columns={'index': 'Cluster', 'exact_cluster': 'Count'}))
 
-            df_clean['nuanced_cluster'] = clusters
+        unique_clusters = sorted(df_clean['exact_cluster'].unique())
+        color_map = dict(zip(unique_clusters, generate_colors(min(len(unique_clusters), 20))))
 
-            st.subheader("Nuanced Cluster Summary")
-            st.dataframe(df_clean['nuanced_cluster'].value_counts().reset_index().rename(columns={'index': 'Cluster', 'nuanced_cluster': 'Count'}))
+        def highlight_exact_clusters(row):
+            color = color_map.get(row['exact_cluster'], '#FFFFFF')
+            return ['background-color: {}'.format(color) if col in [selected_col, 'exact_cluster'] else '' for col in row.index]
 
-            st.subheader("Sample Data with Nuanced Cluster Labels")
-            st.dataframe(df_clean[[selected_col, 'nuanced_cluster']].head(20))
+        styled_df = df_clean.style.apply(highlight_exact_clusters, axis=1)
 
-            # Prepare colors for clusters
-            unique_clusters = df_clean['nuanced_cluster'].unique()
-            unique_clusters_sorted = sorted(unique_clusters)
-            colors = generate_colors(len(unique_clusters_sorted))
-            cluster_color_map = dict(zip(unique_clusters_sorted, colors))
+        towrite = io.BytesIO()
+        styled_df.to_excel(towrite, engine='openpyxl', index=False)
+        towrite.seek(0)
 
-            # Styling function to color by cluster in the selected column only
-            def highlight_clusters(row):
-                color = cluster_color_map.get(row['nuanced_cluster'], '#FFFFFF')
-                return ['background-color: {}'.format(color) if col == selected_col or col == 'nuanced_cluster' else '' for col in row.index]
+        st.subheader("🔍 Search Data by Cluster Name (Normalized)")
 
-            # Apply styling
-            styled_df = df_clean.style.apply(highlight_clusters, axis=1)
+        selected_normalized = st.selectbox(
+            "Select a normalized cluster name to view matching rows:",
+            options=normalized_options,
+            index=0,
+            help="Start typing to search. Similar names are grouped together."
+        )
 
-            # Export styled excel to bytes buffer
-            towrite = io.BytesIO()
-            styled_df.to_excel(towrite, engine='openpyxl', index=False)
-            towrite.seek(0)
+        matching_exact_names = cluster_map.get(selected_normalized, [])
+        filtered_df = df_clean[df_clean['exact_cluster'].isin(matching_exact_names)]
 
-            st.download_button(
-                label="Download Nuanced Clusters Excel (Colored)",
-                data=towrite,
-                file_name="nuanced_clustered_colored.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        
-        if st.button("Exact Match Clustering (Group identical values)"):
-            with st.spinner("Performing exact match clustering..."):
-        # Assign the cluster ID as the group label by exact string value in selected_col
-                df_clean['exact_cluster'] = df_clean[selected_col].fillna("MISSING").astype(str)
+        st.write(f"Showing {len(filtered_df)} rows for normalized cluster group:")
+        st.dataframe(filtered_df)
 
-                st.subheader("Exact Match Cluster Summary")
-                st.dataframe(df_clean['exact_cluster'].value_counts().reset_index().rename(columns={'index': 'Cluster', 'exact_cluster': 'Count'}))
-
-                st.subheader("Sample Data with Exact Match Cluster Labels")
-                st.dataframe(df_clean[[selected_col, 'exact_cluster']].head(20))
-
-        # Generate colors for distinct clusters (limited to 20 distinct colors for performance)
-                unique_clusters = df_clean['exact_cluster'].unique()
-                unique_clusters_sorted = sorted(unique_clusters)
-                colors = generate_colors(min(len(unique_clusters_sorted), 20))
-                cluster_color_map = dict(zip(unique_clusters_sorted, colors))
-
-                def highlight_exact_clusters(row):
-                    color = cluster_color_map.get(row['exact_cluster'], '#FFFFFF')
-                    return ['background-color: {}'.format(color) if col == selected_col or col == 'exact_cluster' else '' for col in row.index]
-
-                styled_df = df_clean.style.apply(highlight_exact_clusters, axis=1)
-
-                towrite = io.BytesIO()
-                styled_df.to_excel(towrite, engine='openpyxl', index=False)
-                towrite.seek(0)
-
-                st.download_button(
-                label="Download Exact Match Clusters Excel (Colored)",
-                data=towrite,
-                file_name="exact_match_clusters_colored.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        st.download_button(
+            "Download Exact Match Clusters Excel (Colored)", 
+            towrite, 
+            file_name="exact_match_clusters.xlsx", 
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
