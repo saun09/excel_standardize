@@ -101,6 +101,34 @@ def safe_numeric_conversion(series):
     
     return series.apply(convert_value)
 
+def group_data(df, group_by_columns, aggregation_rules=None):
+    """
+    Group data by specified columns with optional aggregations.
+    
+    Args:
+        df: DataFrame to group
+        group_by_columns: List of columns to group by
+        aggregation_rules: Dictionary of {column: aggregation_function}
+                           If None, will default to count aggregation
+    
+    Returns:
+        Grouped DataFrame
+    """
+    if not group_by_columns:
+        return df
+    
+    # Default to count aggregation if no rules provided
+    if aggregation_rules is None:
+        aggregation_rules = {'__count__': 'size'}
+    
+    try:
+        grouped_df = df.groupby(group_by_columns).agg(aggregation_rules).reset_index()
+        return grouped_df
+    except Exception as e:
+        st.error(f"Error during grouping: {str(e)}")
+        return df
+    
+    
 def convert_df_to_csv_bytes(df):
     return df.to_csv(index=False).encode('utf-8')
 
