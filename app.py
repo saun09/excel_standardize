@@ -1,97 +1,103 @@
 import streamlit as st
 import pandas as pd
-from rapidfuzz import process, fuzz
 import re
-import io
+from sklearn.cluster import DBSCAN
+from sentence_transformers import SentenceTransformer
 
-st.set_page_config(page_title="Auto Excel Standardizer", layout="wide")
+# Initialize model once (expensive)
+@st.cache_resource
+def load_model():
+    return SentenceTransformer('all-MiniLM-L6-v2')
 
-def clean_text(text):
-    if pd.isna(text):
-        return ""
-    text = str(text).lower().strip()
-    text = re.sub(r'[^a-z0-9\s]', '', text)
-    text = re.sub(r'\s+', ' ', text)
-    return text
+model = load_model()
 
-def standardize_all_columns(df, threshold=90):
-    mappings_per_column = {}
-    df_std = df.copy()
+# Normalize function
+def normalize_name(name):
+    name = str(name).lower()
+    name = re.sub(r'[^\w\s]', '', name)  # Remove punctuation
+    suffixes = ['incorporated', 'inc', 'corp', 'corporation', 'co', 'company', 'limited', 'ltd', 'llc']
+    for suf in suffixes:
+        name = re.sub(r'\b' + suf + r'\b', '', name)
+    name = re.sub(r'\s+', ' ', name).strip()
+    return name
+
+# Canonical name selector
+def get_canonical_name(names):
+    return min(names, key=len)
+
+# Streamlit UI
+st.title("Company Name Standardizer & Query Tool")
+
+uploaded_file = st.file_uploader("Upload Excel or CSV file", type=['xlsx', 'xls', 'csv'])
+
     
-    for col in df.columns:
-        if df[col].dtype == object:
-            df_std[col + '_original'] = df[col]
-            df_std[col] = df[col].apply(clean_text)
-            unique_vals = df_std[col].dropna().unique()
-            mapping = {}
+if uploaded_file is not None:
+    # Load file depending on type
+    if uploaded_file.name.endswith(('xls', 'xlsx')):
+        df = pd.read_excel(uploaded_file)
+    else:
+        try:
+            df = pd.read_csv(uploaded_file, encoding='utf-8')
+        except UnicodeDecodeError:
+            try:
+                df = pd.read_csv(uploaded_file, encoding='latin1')
+            except Exception as e:
+                st.error(f"Failed to read CSV file: {e}")
+                st.stop()
+    st.write("### Preview of Uploaded Data")
+    st.dataframe(df.head())
 
-            for val in unique_vals:
-                if not mapping:
-                    # First entry becomes its own representative
-                    mapping[val] = val
-                else:
-                    result = process.extractOne(val, mapping.keys(), scorer=fuzz.token_sort_ratio)
-                    if result is not None:
-                        match, score, _ = result
-                        if score >= threshold:
-                            mapping[val] = mapping[match]
-                        else:
-                            mapping[val] = val
-                    else:
-                        mapping[val] = val
+    # Check if required columns exist
+    required_columns = ['Company', 'Product', 'Year']
+    missing_cols = [col for col in required_columns if col not in df.columns]
+    if missing_cols:
+        st.error(f"Missing required columns: {missing_cols}")
+    else:
+        # Normalize company names
+        df['Company_norm'] = df['Company'].apply(normalize_name)
 
-            df_std[col] = df_std[col].map(mapping)
-            mappings_per_column[col] = mapping
+        # Generate embeddings
+        embeddings = model.encode(df['Company_norm'].tolist())
 
-    return df_std, mappings_per_column
+        # Cluster company names
+        clustering = DBSCAN(eps=0.4, min_samples=1, metric='cosine').fit(embeddings)
+        df['cluster'] = clustering.labels_
 
+        # Map canonical names
+        canonical_map = {}
+        for cluster_id in df['cluster'].unique():
+            cluster_names = df.loc[df['cluster'] == cluster_id, 'Company_norm']
+            canonical = get_canonical_name(cluster_names)
+            for name in cluster_names:
+                canonical_map[name] = canonical
+        df['Company_standardized'] = df['Company_norm'].map(canonical_map)
 
-# === Streamlit UI ===
-st.title("🤖 Auto Excel Standardizer")
+        st.write("### Standardized Company Names (Sample)")
+        st.dataframe(df[['Company', 'Company_standardized']].drop_duplicates().reset_index(drop=True))
 
-uploaded_file = st.file_uploader("📁 Upload your Excel file", type=["xlsx"])
+        # Query input
+        st.sidebar.header("Search Query")
+        query_company = st.sidebar.text_input("Company Name (standardized)", "")
+        query_product = st.sidebar.text_input("Product", "")
+        year_range = st.sidebar.slider("Year range", int(df['Year'].min()), int(df['Year'].max()),
+                                      (int(df['Year'].min()), int(df['Year'].max())))
 
-if uploaded_file:
-    df = pd.read_excel(uploaded_file)
-    st.success("✅ File loaded and read!")
+        if st.sidebar.button("Run Query"):
+            query_df = df.copy()
 
-    with st.expander("📊 Original Preview"):
-        st.dataframe(df.head(20))
+            if query_company:
+                # Normalize query_company same way + map to canonical
+                norm_query = normalize_name(query_company)
+                std_query = canonical_map.get(norm_query, norm_query)
+                query_df = query_df[query_df['Company_standardized'] == std_query]
 
-    st.info("Standardizing all string columns... please wait.")
-    standardized_df, mappings = standardize_all_columns(df, threshold=90)
-    st.success("🎉 Standardization complete!")
+            if query_product:
+                query_df = query_df[query_df['Product'].str.lower() == query_product.lower()]
 
-    with st.expander("🧼 Standardized Preview"):
-        st.dataframe(standardized_df.head(20))
+            query_df = query_df[query_df['Year'].between(year_range[0], year_range[1])]
 
-    # File download
-    output = io.BytesIO()
-    standardized_df.to_excel(output, index=False, engine='openpyxl')
-    output.seek(0)
-    st.download_button(
-        label="📥 Download Standardized Excel",
-        data=output,
-        file_name="standardized_output.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+            st.write(f"### Query Results: {len(query_df)} rows")
+            st.dataframe(query_df)
 
-    # Search Interface
-    st.subheader("🔍 Search Across Standardized Data")
-    search_term = st.text_input("Enter search term (e.g., 'sachin optics')")
-
-    if search_term:
-        cleaned_search = clean_text(search_term)
-        result_rows = pd.DataFrame()
-
-        for col in standardized_df.select_dtypes(include='object').columns:
-            matches = standardized_df[standardized_df[col].apply(
-                lambda x: fuzz.token_sort_ratio(cleaned_search, x) >= 90
-            )]
-            result_rows = pd.concat([result_rows, matches], ignore_index=True)
-
-        if not result_rows.empty:
-            st.success(f"🔎 Found {len(result_rows)} matching rows:")
-            st.dataframe(result_rows.drop_duplicates())
-        else:
-            st.warning("No matches found.")
+else:
+    st.info("Please upload an Excel (.xlsx/.xls) or CSV (.csv) file with columns: Company, Product, Year")
