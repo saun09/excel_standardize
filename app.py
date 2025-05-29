@@ -1,79 +1,110 @@
 import streamlit as st
 import pandas as pd
 import re
-from dateutil import parser
+from io import BytesIO
 
-# Helper: Clean string fields
-def clean_string(value):
-    value = str(value).lower().strip()
-    value = re.sub(r'[\s]+', ' ', value)  # Collapse spaces
-    return value
+# Helper functions (same as before)
+def is_email(value):
+    return bool(re.match(r"[^@]+@[^@]+\.[^@]+", str(value)))
 
-# Helper: Clean PIN-like fields
-def clean_pin(value):
+def standardize_string(value):
     if pd.isna(value):
         return value
-    value = str(value)
-    value = value.replace('PIN-', '').strip()
-    match = re.search(r'\b(\d{6})\b', value)
-    return match.group(1) if match else value
+    val = str(value).strip().lower()
+    return val
 
-# Helper: Clean date fields
-def clean_date(value):
-    try:
-        return parser.parse(str(value), dayfirst=True).date().isoformat()
-    except Exception:
+def extract_digits(value):
+    if pd.isna(value):
         return value
+    digits = re.findall(r'\d+', str(value))
+    return ''.join(digits) if digits else None
 
-# Load file with correct encoding
-@st.cache_data
-def load_file(uploaded_file):
-    try:
-        if uploaded_file.name.endswith(('xlsx', 'xls')):
-            df = pd.read_excel(uploaded_file)
-        else:
-            df = pd.read_csv(uploaded_file, encoding='utf-8')
-    except UnicodeDecodeError:
-        df = pd.read_csv(uploaded_file, encoding='ISO-8859-1')
+def split_composite_column(series):
+    delimiters = [',', ';', '/', '|', '-', '(', ')']
+    delimiter_scores = {}
+
+    sample_values = series.dropna().astype(str).sample(min(100, len(series))) if len(series.dropna()) > 0 else pd.Series(dtype=str)
+    for delim in delimiters:
+        count = sum(val.count(delim) for val in sample_values)
+        delimiter_scores[delim] = count
+
+    best_delim = max(delimiter_scores, key=delimiter_scores.get) if delimiter_scores else None
+    if not best_delim or delimiter_scores[best_delim] == 0:
+        return None
+
+    if best_delim in ['(', ')']:
+        splits = series.astype(str).str.split(r'\(')
+        splits = splits.apply(lambda parts: [p.strip().rstrip(')') for p in parts])
+    else:
+        splits = series.astype(str).str.split(best_delim)
+
+    max_parts = splits.apply(len).max()
+
+    df_parts = pd.DataFrame(
+        splits.tolist(),
+        columns=[f'part{i+1}' for i in range(max_parts)],
+        index=series.index
+    ).fillna('')
+
+    return df_parts
+
+def auto_standardize(df, string_columns):
+    df = df.copy()
+    for col in string_columns:
+        df[col] = df[col].apply(standardize_string)
+        if re.search(r'pin|postal|zip|code', col, re.I):
+            df[col] = df[col].apply(extract_digits)
+        split_df = split_composite_column(df[col])
+        if split_df is not None:
+            split_df = split_df.rename(columns=lambda x: f"{col}_{x}")
+            df = df.drop(columns=[col])
+            df = pd.concat([df, split_df], axis=1)
     return df
 
-# Streamlit UI
-st.title("Auto Data Cleaner for Excel/CSV Files")
-
-uploaded_file = st.file_uploader("Upload Excel or CSV file", type=['xlsx', 'xls', 'csv'])
-
-if uploaded_file is not None:
-    df = load_file(uploaded_file)
-
-    st.subheader("Preview Before Cleaning")
-    st.dataframe(df.head())
-
+def detect_string_columns(df):
+    string_cols = []
     for col in df.columns:
-        if df[col].dtype == object:
-            # Skip emails
-            if df[col].astype(str).str.contains('@').any():
-                continue
+        series = df[col].dropna()
+        # Filter strings
+        string_values = series[series.apply(lambda x: isinstance(x, str))]
+        if not string_values.empty:
+            # Exclude if any looks like email
+            if not string_values.map(is_email).any():
+                string_cols.append(col)
+    return string_cols
 
-            sample_vals = df[col].dropna().astype(str).head(20).tolist()
+def convert_df_to_csv_bytes(df):
+    return df.to_csv(index=False).encode('utf-8')
 
-            # Handle PIN-like fields
-            if any("PIN" in val or re.match(r'\d{6}', val) for val in sample_vals):
-                df[col] = df[col].apply(clean_pin)
+# Streamlit UI starts here
+st.title("Auto Standardizer for CSV Data")
 
-            # Handle likely dates
-            elif any(re.search(r'\d{1,2}[\./\-]\d{1,2}[\./\-]\d{2,4}', val) for val in sample_vals):
-                df[col] = df[col].apply(clean_date)
+uploaded_file = st.file_uploader("Upload your CSV file", type=['csv'])
 
-            # Generic string cleaning
-            else:
-                df[col] = df[col].apply(clean_string)
+if uploaded_file:
+    # Read CSV with fallback encoding
+    try:
+        df = pd.read_csv(uploaded_file)
+    except UnicodeDecodeError:
+        uploaded_file.seek(0)
+        df = pd.read_csv(uploaded_file, encoding='ISO-8859-1')
 
-    st.subheader("Cleaned Data Preview")
+    st.write("### Original Data Sample")
     st.dataframe(df.head())
 
-    # Option to download cleaned file
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button("Download Cleaned CSV", csv, "cleaned_data.csv", "text/csv")
+    string_cols = detect_string_columns(df)
 
-else:
-    st.info("Please upload an Excel or CSV file.")
+    st.write(f"**Detected string columns (to standardize):** {string_cols}")
+
+    if st.button("Run Standardization"):
+        df_std = auto_standardize(df, string_cols)
+        st.write("### Standardized Data Sample")
+        st.dataframe(df_std.head())
+
+        csv_bytes = convert_df_to_csv_bytes(df_std)
+        st.download_button(
+            label="Download Standardized CSV",
+            data=csv_bytes,
+            file_name="standardized_output.csv",
+            mime="text/csv"
+        )
