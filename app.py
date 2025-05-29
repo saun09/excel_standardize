@@ -4,6 +4,7 @@ import re
 import unicodedata
 import io
 import random
+import string
 
 # ---------- Helper Functions ----------
 
@@ -45,27 +46,8 @@ def standardize_dataframe(df, string_cols):
         df[col] = df[col].apply(lambda x: standardize_value(x, col_name=col))
     return df
 
-# ---------- App Title and Upload ----------
+# ---------- Normalization Functions ----------
 
-st.title("String Standardization + Exact Match Clustering")
-
-uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
-
-if uploaded_file:
-    df = pd.read_csv(uploaded_file, encoding='ISO-8859-1')
-    st.subheader("Original Data Sample")
-    st.dataframe(df.head(10))
-
-    string_cols = detect_string_columns(df)
-    st.write(f"Detected string columns to standardize: {string_cols}")
-
-    if st.button("Standardize String Columns"):
-        st.session_state.df_clean = standardize_dataframe(df, string_cols)
-        st.session_state.standardized = True
-
-# ---------- Exact Match Clustering + Normalized Search ----------
-
-import string
 def normalize_for_clustering(val):
     if pd.isna(val):
         return "MISSING"
@@ -79,15 +61,38 @@ def normalize_cluster_name(name):
     if pd.isna(name):
         return "UNKNOWN"
     name = str(name).lower().strip()
-
-    # Remove batch numbers (like b210119101 etc.)
-    name = re.sub(r'\bb\d{9}\b', '', name)
-
-    # Remove extra punctuation and normalize spaces
+    name = re.sub(r'\bb\d{9}\b', '', name)  # Remove batch numbers
     name = name.translate(str.maketrans('', '', string.punctuation))
     name = re.sub(r'\s+', ' ', name).strip()
-    
     return name
+
+# ---------- App UI ----------
+
+st.title("String Standardization + Exact Match Clustering")
+
+uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
+
+# Persist uploaded dataframe in session state
+if uploaded_file:
+    if "df" not in st.session_state or st.session_state.get("uploaded_file") != uploaded_file.name:
+        st.session_state.df = pd.read_csv(uploaded_file, encoding='ISO-8859-1')
+        st.session_state.uploaded_file = uploaded_file.name
+        st.session_state.standardized = False
+        st.session_state.df_clean = None
+        st.session_state.selected_col = None
+        st.session_state.clustered = False
+
+if "df" in st.session_state:
+    st.subheader("Original Data Sample")
+    st.dataframe(st.session_state.df.head(10))
+
+    string_cols = detect_string_columns(st.session_state.df)
+    st.write(f"Detected string columns to standardize: {string_cols}")
+
+    if st.button("Standardize String Columns"):
+        st.session_state.df_clean = standardize_dataframe(st.session_state.df, string_cols)
+        st.session_state.standardized = True
+        st.session_state.clustered = False  # reset clustering
 
 if st.session_state.get("standardized") and st.session_state.get("df_clean") is not None:
     df_clean = st.session_state.df_clean
@@ -96,15 +101,21 @@ if st.session_state.get("standardized") and st.session_state.get("df_clean") is 
     st.dataframe(df_clean.head(10))
 
     string_cols = detect_string_columns(df_clean)
-    selected_col = st.selectbox("Select column for clustering", string_cols)
+    # Use a selectbox with a key to persist selected column
+    selected_col = st.selectbox("Select column for clustering", string_cols, key="selected_col")
 
     if st.button("Exact Match Clustering"):
+        # Apply normalization for clustering
         df_clean['exact_cluster'] = df_clean[selected_col].apply(normalize_for_clustering)
-
-        # Add normalized cluster column
         df_clean['normalized_cluster'] = df_clean['exact_cluster'].apply(normalize_cluster_name)
 
-        # Create mapping normalized_cluster -> list of exact_cluster(s)
+        # Save clustering results back to session_state
+        st.session_state.df_clean = df_clean
+        st.session_state.clustered = True
+
+    if st.session_state.get("clustered"):
+        df_clean = st.session_state.df_clean
+
         cluster_map = df_clean.groupby('normalized_cluster')['exact_cluster'].agg(lambda x: list(set(x))).to_dict()
         normalized_options = sorted(cluster_map.keys())
 
@@ -130,6 +141,7 @@ if st.session_state.get("standardized") and st.session_state.get("df_clean") is 
             "Select a normalized cluster name to view matching rows:",
             options=normalized_options,
             index=0,
+            key="normalized_cluster_select",
             help="Start typing to search. Similar names are grouped together."
         )
 
