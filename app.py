@@ -79,47 +79,62 @@ def standardize_dataframe(df, string_cols):
 
 # NEW CLUSTERING FUNCTIONS
 def extract_core_product_name(text):
-    """Extract the core product name by removing technical details and codes"""
+    """Extract the core product name by preserving important product codes"""
     if pd.isna(text):
         return ""
     
-    text = str(text).strip()
+    original_text = str(text).strip()
+    text = original_text.lower()
     
-    # Remove content in parentheses
+    # First, extract important product codes before removing parentheses
+    # Look for patterns like (ar-740), (ar-825h), (pq0015066), etc.
+    product_codes = []
+    
+    # Extract alphanumeric codes with hyphens (like ar-740, ar-825h)
+    code_matches = re.findall(r'\(([a-z]{2,3}-?\d+[a-z]*)\)', text)
+    product_codes.extend(code_matches)
+    
+    # Extract other product codes (like pq0015066)
+    other_codes = re.findall(r'\(([a-z]{2}\d+)\)', text)
+    product_codes.extend(other_codes)
+    
+    # Remove descriptions in parentheses but keep the main text structure
     text = re.sub(r'\([^)]*\)', '', text)
     
-    # Remove technical specifications and codes
-    # Remove patterns like PQ0015066, FOR FOOTWEAR INDUSTRY, etc.
-    text = re.sub(r'\b[A-Z]{2}\d+\b', '', text)  # Remove codes like PQ0015066
-    text = re.sub(r'\bFOR\s+[A-Z\s]+INDUSTRY\b', '', text, flags=re.IGNORECASE)
-    
-    # Remove aqueous dispersion descriptions
-    text = re.sub(r'\(AQUEOUS DISPERSION.*?\)', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'AQUEOUS DISPERSION.*', '', text, flags=re.IGNORECASE)
-    
-    # Remove container information
-    text = re.sub(r'\b\d+\s*(FLEXI\s*TANK|CONT|CONTAINER).*', '', text, flags=re.IGNORECASE)
-    
-    # Clean up extra spaces and normalize
+    # Clean up extra spaces
     text = re.sub(r'\s+', ' ', text).strip()
-    text = text.lower()
     
-    # Extract main product pattern (brand + model)
-    # For LIPOLAN products, keep the main identifier
-    match = re.match(r'([a-z]+\s*[a-z]*)\s*([a-z0-9\-]+)', text)
-    if match:
-        brand = match.group(1).strip()
-        model = match.group(2).strip()
-        return f"{brand} {model}"
+    # Extract the base product name (like "acm", "lipolan f", etc.)
+    base_name = ""
     
-    return text
+    # Try to match common patterns
+    if re.match(r'^[a-z]+\s*[a-z]*', text):
+        # Extract first 1-2 words as base name
+        words = text.split()
+        if len(words) >= 2:
+            base_name = f"{words[0]} {words[1]}"
+        else:
+            base_name = words[0] if words else ""
+    else:
+        base_name = text
+    
+    # Combine base name with the most specific product code
+    if product_codes:
+        # Prioritize codes with hyphens and letters (more specific)
+        specific_codes = [code for code in product_codes if '-' in code and any(c.isalpha() for c in code)]
+        if specific_codes:
+            return f"{base_name} {specific_codes[0]}"
+        else:
+            return f"{base_name} {product_codes[0]}"
+    
+    return base_name
 
 def similarity_score(str1, str2):
     """Calculate similarity between two strings"""
     return SequenceMatcher(None, str1, str2).ratio()
 
-def cluster_product_names(series, similarity_threshold=0.7):
-    """Cluster similar product names together"""
+def cluster_product_names(series, similarity_threshold=0.8):
+    """Cluster similar product names together with better product code handling"""
     if series.empty:
         return pd.Series([], dtype=str)
     
@@ -127,45 +142,18 @@ def cluster_product_names(series, similarity_threshold=0.7):
     unique_values = series.dropna().unique()
     core_names = {val: extract_core_product_name(val) for val in unique_values}
     
-    # Group by core names first
-    core_groups = defaultdict(list)
-    for val, core in core_names.items():
-        if core:  # Only process non-empty core names
-            core_groups[core].append(val)
-    
-    # Create clusters within each core group
+    # Create direct mapping - each unique core name becomes a cluster
     clusters = {}
-    cluster_id = 0
     
-    for core_name, values in core_groups.items():
-        if len(values) == 1:
-            # Single item, use core name as cluster
-            clusters[values[0]] = core_name
+    for val, core in core_names.items():
+        if core and core.strip():  # Only process non-empty core names
+            clusters[val] = core
         else:
-            # Multiple items, check for sub-clustering
-            processed = set()
-            for val in values:
-                if val in processed:
-                    continue
-                
-                cluster_members = [val]
-                processed.add(val)
-                
-                # Find similar items
-                for other_val in values:
-                    if other_val != val and other_val not in processed:
-                        if similarity_score(val, other_val) >= similarity_threshold:
-                            cluster_members.append(other_val)
-                            processed.add(other_val)
-                
-                # Create cluster name (use the core name or the shortest representative)
-                cluster_name = core_name if core_name else min(cluster_members, key=len)
-                
-                for member in cluster_members:
-                    clusters[member] = cluster_name
+            # Fallback for items without clear core names
+            clusters[val] = str(val).lower().strip()
     
     # Map the series values to cluster names
-    return series.map(lambda x: clusters.get(x, extract_core_product_name(x) if pd.notna(x) else x))
+    return series.map(lambda x: clusters.get(x, str(x).lower().strip() if pd.notna(x) else x))
 
 def add_cluster_column(df, column_name):
     """Add a cluster column for the specified column"""
