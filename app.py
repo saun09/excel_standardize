@@ -4,13 +4,16 @@ import re
 import unicodedata
 from collections import Counter
 
+# Sentence Transformers
+from sentence_transformers import SentenceTransformer
+from sklearn.cluster import AgglomerativeClustering
+
 # Session state initialization
 if "standardized" not in st.session_state:
     st.session_state.standardized = False
 if "df_clean" not in st.session_state:
     st.session_state.df_clean = None
 
-# Email detection pattern
 email_pattern = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
 
 def is_email(value):
@@ -55,30 +58,15 @@ def standardize_dataframe(df, string_cols):
         df[col] = df[col].apply(lambda x: standardize_value(x, col_name=col))
     return df
 
-def infer_common_tokens(series, top_k=15):
-    tokens = []
-    for val in series.dropna():
-        val = re.sub(r'[^\w\s]', '', str(val)).lower()
-        tokens.extend(val.split())
-    counter = Counter(tokens)
-    common_tokens = [tok for tok, count in counter.items() if count > 1]
-    return sorted(common_tokens, key=counter.get, reverse=True)[:top_k]
-
-def extract_primary_token(val):
-    if pd.isna(val):
-        return "MISC"
-    val = str(val).lower()
-    val = re.sub(r'[^\w\s]', ' ', val)  # Remove special chars
-    tokens = val.split()
-    skip_words = {'for', 'in', 'used', 'material', 'industry', 'binder', 'bulk', 'with', 'from'}
-    for tok in tokens:
-        if tok not in skip_words and len(tok) > 2 and any(c.isalpha() for c in tok):
-            return tok.upper()
-    return "MISC"
-
+def cluster_with_embeddings(series, threshold=1.5):
+    model = SentenceTransformer('all-MiniLM-L6-v2')
+    embeddings = model.encode(series.fillna("").astype(str).tolist())
+    clustering = AgglomerativeClustering(n_clusters=None, distance_threshold=threshold)
+    labels = clustering.fit_predict(embeddings)
+    return labels
 
 # --- Streamlit App ---
-st.title("Automatic String Column Standardizer + Token-Based Clustering")
+st.title("Automatic String Column Standardizer + Smart Semantic Clustering")
 
 uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
 
@@ -103,16 +91,11 @@ if st.session_state.standardized and st.session_state.df_clean is not None:
     st.dataframe(df_clean.head(10))
 
     string_cols = detect_string_columns(df_clean)
-    selected_col = st.selectbox("Select Column for Token-Based Clustering", options=string_cols)
+    selected_col = st.selectbox("Select Column for Smart Clustering", options=string_cols)
 
-    if st.button("Auto Cluster by Tokens"):
-        with st.spinner("Inferring clusters based on frequent tokens..."):
-            common_tokens = infer_common_tokens(df_clean[selected_col], top_k=15)
-            df_clean['auto_cluster'] = df_clean[selected_col].apply(extract_primary_token)
-
-
-            st.subheader("Top Tokens Used for Clustering")
-            st.write(common_tokens)
+    if st.button("Smart Cluster with Sentence Embeddings"):
+        with st.spinner("Clustering with sentence embeddings..."):
+            df_clean['auto_cluster'] = cluster_with_embeddings(df_clean[selected_col])
 
             st.subheader("Cluster Summary")
             st.dataframe(df_clean['auto_cluster'].value_counts().reset_index().rename(columns={'index': 'Cluster', 'auto_cluster': 'Count'}))
@@ -122,8 +105,8 @@ if st.session_state.standardized and st.session_state.df_clean is not None:
 
             csv = df_clean.to_csv(index=False).encode('utf-8')
             st.download_button(
-                label="Download CSV with Auto Clusters",
+                label="Download CSV with Clusters",
                 data=csv,
-                file_name="token_based_clustered.csv",
+                file_name="semantic_clustered.csv",
                 mime="text/csv"
             )
