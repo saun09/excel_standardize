@@ -1,110 +1,96 @@
 import streamlit as st
 import pandas as pd
 import re
-from io import BytesIO
+import unicodedata
+from io import StringIO
 
-# Helper functions (same as before)
+# Strict email regex to avoid false positives
+email_pattern = re.compile(
+    r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+)
+
 def is_email(value):
-    return bool(re.match(r"[^@]+@[^@]+\.[^@]+", str(value)))
-
-def standardize_string(value):
-    if pd.isna(value):
-        return value
-    val = str(value).strip().lower()
-    return val
-
-def extract_digits(value):
-    if pd.isna(value):
-        return value
-    digits = re.findall(r'\d+', str(value))
-    return ''.join(digits) if digits else None
-
-def split_composite_column(series):
-    delimiters = [',', ';', '/', '|', '-', '(', ')']
-    delimiter_scores = {}
-
-    sample_values = series.dropna().astype(str).sample(min(100, len(series))) if len(series.dropna()) > 0 else pd.Series(dtype=str)
-    for delim in delimiters:
-        count = sum(val.count(delim) for val in sample_values)
-        delimiter_scores[delim] = count
-
-    best_delim = max(delimiter_scores, key=delimiter_scores.get) if delimiter_scores else None
-    if not best_delim or delimiter_scores[best_delim] == 0:
-        return None
-
-    if best_delim in ['(', ')']:
-        splits = series.astype(str).str.split(r'\(')
-        splits = splits.apply(lambda parts: [p.strip().rstrip(')') for p in parts])
-    else:
-        splits = series.astype(str).str.split(best_delim)
-
-    max_parts = splits.apply(len).max()
-
-    df_parts = pd.DataFrame(
-        splits.tolist(),
-        columns=[f'part{i+1}' for i in range(max_parts)],
-        index=series.index
-    ).fillna('')
-
-    return df_parts
-
-def auto_standardize(df, string_columns):
-    df = df.copy()
-    for col in string_columns:
-        df[col] = df[col].apply(standardize_string)
-        if re.search(r'pin|postal|zip|code', col, re.I):
-            df[col] = df[col].apply(extract_digits)
-        split_df = split_composite_column(df[col])
-        if split_df is not None:
-            split_df = split_df.rename(columns=lambda x: f"{col}_{x}")
-            df = df.drop(columns=[col])
-            df = pd.concat([df, split_df], axis=1)
-    return df
+    value = str(value).strip()
+    return bool(email_pattern.match(value))
 
 def detect_string_columns(df):
     string_cols = []
     for col in df.columns:
         series = df[col].dropna()
-        # Filter strings
-        string_values = series[series.apply(lambda x: isinstance(x, str))]
-        if not string_values.empty:
-            # Exclude if any looks like email
-            if not string_values.map(is_email).any():
-                string_cols.append(col)
+        # Check if column has any string with alphabetic char
+        has_text = series.astype(str).apply(lambda x: any(c.isalpha() for c in x)).any()
+        # Exclude columns that contain emails
+        contains_email = series.astype(str).map(is_email).any()
+        # Exclude numeric-only columns
+        is_numeric = pd.api.types.is_numeric_dtype(df[col])
+        if has_text and not contains_email and not is_numeric:
+            string_cols.append(col)
     return string_cols
 
-def convert_df_to_csv_bytes(df):
-    return df.to_csv(index=False).encode('utf-8')
+def clean_pin(value):
+    if pd.isna(value):
+        return value
+    value = str(value)
+    # Remove "pin-" prefix, case-insensitive
+    value = re.sub(r'pin-', '', value, flags=re.IGNORECASE).strip()
+    # Extract first group of 6 digits
+    match = re.search(r'\b(\d{6})\b', value)
+    return match.group(1) if match else value
 
-# Streamlit UI starts here
-st.title("Auto Standardizer for CSV Data")
 
-uploaded_file = st.file_uploader("Upload your CSV file", type=['csv'])
+def standardize_value(val, col_name=""):
+    if pd.isna(val):
+        return val
+    
+    val_str = str(val)
+
+    if val_str.strip() == "":
+        return val_str
+    
+    if "pin" in col_name.lower():
+        return clean_pin(val)
+
+   # digits = re.sub(r'\D', '', val_str)
+    #digit_ratio = len(digits) / max(len(val_str), 1)
+    #if digit_ratio > 0.8:
+       # return digits
+
+    val_str = unicodedata.normalize('NFKD', val_str).encode('ascii', 'ignore').decode('utf-8')
+    val_str = val_str.lower()
+    val_str = val_str.strip()
+    val_str = re.sub(r'\s+', ' ', val_str)
+
+    return val_str
+
+def standardize_dataframe(df, string_cols):
+    df = df.copy()
+    for col in string_cols:
+        df[col] = df[col].apply(lambda x: standardize_value(x, col_name=col))
+    return df
+
+st.title("Automatic String Column Standardizer")
+
+uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
 
 if uploaded_file:
-    # Read CSV with fallback encoding
-    try:
-        df = pd.read_csv(uploaded_file)
-    except UnicodeDecodeError:
-        uploaded_file.seek(0)
-        df = pd.read_csv(uploaded_file, encoding='ISO-8859-1')
-
-    st.write("### Original Data Sample")
-    st.dataframe(df.head())
+    df = pd.read_csv(uploaded_file, encoding='ISO-8859-1')
+    st.subheader("Original Data Sample")
+    st.dataframe(df.head(10))
 
     string_cols = detect_string_columns(df)
+    st.write(f"Detected string columns to standardize ({len(string_cols)}):")
+    st.write(string_cols)
 
-    st.write(f"**Detected string columns (to standardize):** {string_cols}")
+    if st.button("Standardize String Columns"):
+        df_clean = standardize_dataframe(df, string_cols)
+        st.subheader("Standardized Data Sample")
+        st.dataframe(df_clean.head(10))
 
-    if st.button("Run Standardization"):
-        df_std = auto_standardize(df, string_cols)
-        st.write("### Standardized Data Sample")
-        st.dataframe(df_std.head())
-
-        csv_bytes = convert_df_to_csv_bytes(df_std)
+        # Prepare CSV for download
+        csv = df_clean.to_csv(index=False).encode('utf-8')
         st.download_button(
-            label="Download Standardized CSV",
-            data=csv_bytes,
+            label="Download Cleaned CSV",
+            data=csv,
             file_name="standardized_output.csv",
             mime="text/csv"
         )
