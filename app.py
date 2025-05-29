@@ -1,43 +1,71 @@
 import streamlit as st
 import pandas as pd
 import re
+from io import BytesIO
 import unicodedata
-import io
-import random
-import string
+from io import StringIO
+from difflib import SequenceMatcher
+from collections import defaultdict
 
-# ---------- Helper Functions ----------
+# Strict email regex to avoid false positives
+email_pattern = re.compile(
+    r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+)
 
-def generate_colors(n):
-    random.seed(42)
-    return ["#" + ''.join(random.choices('0123456789ABCDEF', k=6)) for _ in range(n)]
+def is_email(value):
+    value = str(value).strip()
+    return bool(email_pattern.match(value))
 
 def detect_string_columns(df):
     string_cols = []
     for col in df.columns:
         series = df[col].dropna()
-        if (series.astype(str).apply(lambda x: any(c.isalpha() for c in x)).any() 
-            and not pd.api.types.is_numeric_dtype(df[col])):
+        # Filter strings
+        string_values = series[series.apply(lambda x: isinstance(x, str))]
+        if not string_values.empty:
+            # Exclude if any looks like email
+            if not string_values.map(is_email).any():
+                string_cols.append(col)
+        # Check if column has any string with alphabetic char
+        has_text = series.astype(str).apply(lambda x: any(c.isalpha() for c in x)).any()
+        # Exclude columns that contain emails
+        contains_email = series.astype(str).map(is_email).any()
+        # Exclude numeric-only columns
+        is_numeric = pd.api.types.is_numeric_dtype(df[col])
+        if has_text and not contains_email and not is_numeric:
             string_cols.append(col)
     return string_cols
+
+def convert_df_to_csv_bytes(df):
+    return df.to_csv(index=False).encode('utf-8')
 
 def clean_pin(value):
     if pd.isna(value):
         return value
     value = str(value)
+    # Remove "pin-" prefix, case-insensitive
     value = re.sub(r'pin-', '', value, flags=re.IGNORECASE).strip()
+    # Extract first group of 6 digits
     match = re.search(r'\b(\d{6})\b', value)
     return match.group(1) if match else value
 
 def standardize_value(val, col_name=""):
     if pd.isna(val):
         return val
-    val_str = str(val).strip()
+    
+    val_str = str(val)
+
+    if val_str.strip() == "":
+        return val_str
+    
     if "pin" in col_name.lower():
         return clean_pin(val)
+
     val_str = unicodedata.normalize('NFKD', val_str).encode('ascii', 'ignore').decode('utf-8')
-    val_str = val_str.lower().strip()
+    val_str = val_str.lower()
+    val_str = val_str.strip()
     val_str = re.sub(r'\s+', ' ', val_str)
+
     return val_str
 
 def standardize_dataframe(df, string_cols):
@@ -46,114 +74,193 @@ def standardize_dataframe(df, string_cols):
         df[col] = df[col].apply(lambda x: standardize_value(x, col_name=col))
     return df
 
-# ---------- Normalization Functions ----------
+# NEW CLUSTERING FUNCTIONS
+def extract_core_product_name(text):
+    """Extract the core product name by removing technical details and codes"""
+    if pd.isna(text):
+        return ""
+    
+    text = str(text).strip()
+    
+    # Remove content in parentheses
+    text = re.sub(r'\([^)]*\)', '', text)
+    
+    # Remove technical specifications and codes
+    # Remove patterns like PQ0015066, FOR FOOTWEAR INDUSTRY, etc.
+    text = re.sub(r'\b[A-Z]{2}\d+\b', '', text)  # Remove codes like PQ0015066
+    text = re.sub(r'\bFOR\s+[A-Z\s]+INDUSTRY\b', '', text, flags=re.IGNORECASE)
+    
+    # Remove aqueous dispersion descriptions
+    text = re.sub(r'\(AQUEOUS DISPERSION.*?\)', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'AQUEOUS DISPERSION.*', '', text, flags=re.IGNORECASE)
+    
+    # Remove container information
+    text = re.sub(r'\b\d+\s*(FLEXI\s*TANK|CONT|CONTAINER).*', '', text, flags=re.IGNORECASE)
+    
+    # Clean up extra spaces and normalize
+    text = re.sub(r'\s+', ' ', text).strip()
+    text = text.lower()
+    
+    # Extract main product pattern (brand + model)
+    # For LIPOLAN products, keep the main identifier
+    match = re.match(r'([a-z]+\s*[a-z]*)\s*([a-z0-9\-]+)', text)
+    if match:
+        brand = match.group(1).strip()
+        model = match.group(2).strip()
+        return f"{brand} {model}"
+    
+    return text
 
-def normalize_for_clustering(val):
-    if pd.isna(val):
-        return "MISSING"
-    val = str(val).lower()
-    val = re.sub(r'[^\w\s]', '', val)  # remove punctuation
-    val = re.sub(r'\s+', ' ', val)     # normalize whitespace
-    val = val.replace(" ", "")         # remove all spaces for tighter matching
-    return val.strip()
+def similarity_score(str1, str2):
+    """Calculate similarity between two strings"""
+    return SequenceMatcher(None, str1, str2).ratio()
 
-def normalize_cluster_name(name):
-    if pd.isna(name):
-        return "UNKNOWN"
-    name = str(name).lower().strip()
-    name = re.sub(r'\bb\d{9}\b', '', name)  # Remove batch numbers
-    name = name.translate(str.maketrans('', '', string.punctuation))
-    name = re.sub(r'\s+', ' ', name).strip()
-    return name
+def cluster_product_names(series, similarity_threshold=0.7):
+    """Cluster similar product names together"""
+    if series.empty:
+        return pd.Series([], dtype=str)
+    
+    # Get unique values and their core names
+    unique_values = series.dropna().unique()
+    core_names = {val: extract_core_product_name(val) for val in unique_values}
+    
+    # Group by core names first
+    core_groups = defaultdict(list)
+    for val, core in core_names.items():
+        if core:  # Only process non-empty core names
+            core_groups[core].append(val)
+    
+    # Create clusters within each core group
+    clusters = {}
+    cluster_id = 0
+    
+    for core_name, values in core_groups.items():
+        if len(values) == 1:
+            # Single item, use core name as cluster
+            clusters[values[0]] = core_name
+        else:
+            # Multiple items, check for sub-clustering
+            processed = set()
+            for val in values:
+                if val in processed:
+                    continue
+                
+                cluster_members = [val]
+                processed.add(val)
+                
+                # Find similar items
+                for other_val in values:
+                    if other_val != val and other_val not in processed:
+                        if similarity_score(val, other_val) >= similarity_threshold:
+                            cluster_members.append(other_val)
+                            processed.add(other_val)
+                
+                # Create cluster name (use the core name or the shortest representative)
+                cluster_name = core_name if core_name else min(cluster_members, key=len)
+                
+                for member in cluster_members:
+                    clusters[member] = cluster_name
+    
+    # Map the series values to cluster names
+    return series.map(lambda x: clusters.get(x, extract_core_product_name(x) if pd.notna(x) else x))
 
-# ---------- App UI ----------
+def add_cluster_column(df, column_name):
+    """Add a cluster column for the specified column"""
+    if column_name not in df.columns:
+        return df
+    
+    df_copy = df.copy()
+    cluster_col_name = f"{column_name}_cluster"
+    df_copy[cluster_col_name] = cluster_product_names(df_copy[column_name])
+    
+    return df_copy
 
-st.title("String Standardization + Exact Match Clustering")
+# Streamlit UI starts here
+st.title("Automatic String Column Standardizer with Clustering")
 
 uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
 
-# Persist uploaded dataframe in session state
 if uploaded_file:
-    if "df" not in st.session_state or st.session_state.get("uploaded_file") != uploaded_file.name:
-        st.session_state.df = pd.read_csv(uploaded_file, encoding='ISO-8859-1')
-        st.session_state.uploaded_file = uploaded_file.name
-        st.session_state.standardized = False
-        st.session_state.df_clean = None
-        st.session_state.selected_col = None
-        st.session_state.clustered = False
+    # Read CSV with fallback encoding
+    try:
+        df = pd.read_csv(uploaded_file)
+    except UnicodeDecodeError:
+        uploaded_file.seek(0)
+        df = pd.read_csv(uploaded_file, encoding='ISO-8859-1')
 
-if "df" in st.session_state:
     st.subheader("Original Data Sample")
-    st.dataframe(st.session_state.df.head(10))
+    st.dataframe(df.head(10))
 
-    string_cols = detect_string_columns(st.session_state.df)
-    st.write(f"Detected string columns to standardize: {string_cols}")
+    string_cols = detect_string_columns(df)
+    st.write(f"**Detected string columns (to standardize):** {string_cols}")
 
     if st.button("Standardize String Columns"):
-        st.session_state.df_clean = standardize_dataframe(st.session_state.df, string_cols)
-        st.session_state.standardized = True
-        st.session_state.clustered = False  # reset clustering
+        df_clean = standardize_dataframe(df, string_cols)
+        st.subheader("Standardized Data Sample")
+        st.dataframe(df_clean.head(10))
 
-if st.session_state.get("standardized") and st.session_state.get("df_clean") is not None:
-    df_clean = st.session_state.df_clean
-
-    st.subheader("Standardized Data Sample")
-    st.dataframe(df_clean.head(10))
-
-    string_cols = detect_string_columns(df_clean)
-    # Use a selectbox with a key to persist selected column
-    selected_col = st.selectbox("Select column for clustering", string_cols, key="selected_col")
-
-    if st.button("Exact Match Clustering"):
-        # Apply normalization for clustering
-        df_clean['exact_cluster'] = df_clean[selected_col].apply(normalize_for_clustering)
-        df_clean['normalized_cluster'] = df_clean['exact_cluster'].apply(normalize_cluster_name)
-
-        # Save clustering results back to session_state
-        st.session_state.df_clean = df_clean
-        st.session_state.clustered = True
-
-    if st.session_state.get("clustered"):
-        df_clean = st.session_state.df_clean
-
-        cluster_map = df_clean.groupby('normalized_cluster')['exact_cluster'].agg(lambda x: list(set(x))).to_dict()
-        normalized_options = sorted(cluster_map.keys())
-
-        st.subheader("Exact Match Cluster Summary")
-        st.dataframe(df_clean['exact_cluster'].value_counts().reset_index().rename(columns={'index': 'Cluster', 'exact_cluster': 'Count'}))
-
-        unique_clusters = sorted(df_clean['exact_cluster'].unique())
-        color_map = dict(zip(unique_clusters, generate_colors(min(len(unique_clusters), 20))))
-
-        def highlight_exact_clusters(row):
-            color = color_map.get(row['exact_cluster'], '#FFFFFF')
-            return ['background-color: {}'.format(color) if col in [selected_col, 'exact_cluster'] else '' for col in row.index]
-
-        styled_df = df_clean.style.apply(highlight_exact_clusters, axis=1)
-
-        towrite = io.BytesIO()
-        styled_df.to_excel(towrite, engine='openpyxl', index=False)
-        towrite.seek(0)
-
-        st.subheader("🔍 Search Data by Cluster Name (Normalized)")
-
-        selected_normalized = st.selectbox(
-            "Select a normalized cluster name to view matching rows:",
-            options=normalized_options,
-            index=0,
-            key="normalized_cluster_select",
-            help="Start typing to search. Similar names are grouped together."
-        )
-
-        matching_exact_names = cluster_map.get(selected_normalized, [])
-        filtered_df = df_clean[df_clean['exact_cluster'].isin(matching_exact_names)]
-
-        st.write(f"Showing {len(filtered_df)} rows for normalized cluster group:")
-        st.dataframe(filtered_df)
-
+        # Prepare CSV for download
+        csv = df_clean.to_csv(index=False).encode('utf-8')
         st.download_button(
-            "Download Exact Match Clusters Excel (Colored)", 
-            towrite, 
-            file_name="exact_match_clusters.xlsx", 
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            label="Download Standardized CSV",
+            data=csv,
+            file_name="standardized_output.csv",
+            mime="text/csv"
         )
+        
+        # Store standardized data in session state for clustering
+        st.session_state['df_standardized'] = df_clean
+        st.session_state['string_cols'] = string_cols
+
+# Clustering section (only show if standardized data exists)
+if 'df_standardized' in st.session_state:
+    st.subheader("Product Name Clustering")
+    st.write("Select a column to cluster similar product names:")
+    
+    df_std = st.session_state['df_standardized']
+    cluster_column = st.selectbox(
+        "Choose column for clustering:",
+        options=st.session_state['string_cols'],
+        key="cluster_column_select"
+    )
+    
+    if st.button("Create Clusters"):
+        df_clustered = add_cluster_column(df_std, cluster_column)
+        
+        st.subheader("Data with Clusters")
+        # Show original, standardized, and clustered columns side by side
+        display_cols = [cluster_column, f"{cluster_column}_cluster"]
+        if cluster_column in df_clustered.columns:
+            st.dataframe(df_clustered[display_cols].head(20))
+        
+        # Show cluster summary
+        cluster_col = f"{cluster_column}_cluster"
+        if cluster_col in df_clustered.columns:
+            cluster_counts = df_clustered[cluster_col].value_counts()
+            st.subheader("Cluster Summary")
+            st.write(f"Total unique clusters: {len(cluster_counts)}")
+            st.dataframe(cluster_counts.head(10).to_frame("Count"))
+        
+        # Download clustered data
+        csv_clustered = df_clustered.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download Data with Clusters",
+            data=csv_clustered,
+            file_name="clustered_output.csv",
+            mime="text/csv"
+        )
+
+st.subheader("How Clustering Works")
+st.write("""
+**Clustering Process:**
+1. **Extract Core Names**: Removes technical details, codes in parentheses, and industry specifications
+2. **Group Similar Items**: Uses text similarity to group related products
+3. **Create Cluster Names**: Generates clean, searchable cluster names
+
+**Examples:**
+- `LIPOLAN F -2530 F (PQ0015066)( FOR FOOTWEAR INDUSTRY)` → `lipolan f -2530`
+- `LIPOLAN F -2630 F (PQ0015066)( FOR FOOTWEAR INDUSTRY)` → `lipolan f -2630`
+- `LIPOLAN T 24H70(AQUEOUS DISPERSION...)` → `lipolan t 24h70`
+
+This allows you to search for "lipolan" products and get all variants grouped together.
+""")
