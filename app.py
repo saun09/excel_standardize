@@ -4,6 +4,11 @@ import re
 import unicodedata
 from io import StringIO
 
+# For clustering
+from sentence_transformers import SentenceTransformer
+import hdbscan
+import numpy as np
+
 # Strict email regex to avoid false positives
 email_pattern = re.compile(
     r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
@@ -37,7 +42,6 @@ def clean_pin(value):
     match = re.search(r'\b(\d{6})\b', value)
     return match.group(1) if match else value
 
-
 def standardize_value(val, col_name=""):
     if pd.isna(val):
         return val
@@ -49,11 +53,6 @@ def standardize_value(val, col_name=""):
     
     if "pin" in col_name.lower():
         return clean_pin(val)
-
-   # digits = re.sub(r'\D', '', val_str)
-    #digit_ratio = len(digits) / max(len(val_str), 1)
-    #if digit_ratio > 0.8:
-       # return digits
 
     val_str = unicodedata.normalize('NFKD', val_str).encode('ascii', 'ignore').decode('utf-8')
     val_str = val_str.lower()
@@ -68,7 +67,25 @@ def standardize_dataframe(df, string_cols):
         df[col] = df[col].apply(lambda x: standardize_value(x, col_name=col))
     return df
 
-st.title("Automatic String Column Standardizer")
+# Company name clustering functions
+def standardize_company_name(name):
+    name = str(name).lower()
+    name = re.sub(r'[^\w\s]', '', name)  # remove punctuation
+    name = re.sub(r'\s+', ' ', name).strip()
+    return name
+
+def cluster_company_names(names_std):
+    model = SentenceTransformer('all-MiniLM-L6-v2')
+    embeddings = model.encode(names_std)
+    clusterer = hdbscan.HDBSCAN(min_cluster_size=2, metric='euclidean')
+    clusters = clusterer.fit_predict(embeddings)
+    return clusters
+
+def get_canonical_name(cluster_names):
+    # Choose shortest name as canonical, can customize
+    return min(cluster_names, key=len)
+
+st.title("Automatic String Column Standardizer + Company Name Clustering")
 
 uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
 
@@ -86,11 +103,52 @@ if uploaded_file:
         st.subheader("Standardized Data Sample")
         st.dataframe(df_clean.head(10))
 
-        # Prepare CSV for download
-        csv = df_clean.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="Download Cleaned CSV",
-            data=csv,
-            file_name="standardized_output.csv",
-            mime="text/csv"
-        )
+        # Company clustering UI
+        company_col = st.selectbox("Select Company Name Column for Clustering", options=string_cols)
+
+        if company_col:
+            with st.spinner("Clustering company names... this may take a few seconds"):
+                # Standardize company names
+                df_clean['company_std'] = df_clean[company_col].apply(standardize_company_name)
+                unique_names = df_clean['company_std'].unique().tolist()
+
+                # Cluster
+                clusters = cluster_company_names(unique_names)
+
+                # Map cluster id to company names
+                cluster_dict = {}
+                for name, cluster_id in zip(unique_names, clusters):
+                    if cluster_id == -1:
+                        # noise - assign unique cluster id
+                        cluster_id = max(clusters) + 1 + len(cluster_dict)
+                    cluster_dict.setdefault(cluster_id, []).append(name)
+
+                # Map each name to canonical name
+                canonical_mapping = {}
+                for cluster_id, names_list in cluster_dict.items():
+                    canonical = get_canonical_name(names_list)
+                    for n in names_list:
+                        canonical_mapping[n] = canonical
+
+                # Map in df
+                df_clean['company_canonical'] = df_clean['company_std'].map(canonical_mapping)
+
+                st.subheader("Company Name Clusters and Canonical Names")
+                cluster_summary = pd.DataFrame(
+                    [(cid, ', '.join(names[:5]) + ('...' if len(names) > 5 else ''), get_canonical_name(names), len(names))
+                     for cid, names in cluster_dict.items()],
+                    columns=['Cluster ID', 'Sample Names', 'Canonical Name', 'Count']
+                )
+                st.dataframe(cluster_summary)
+
+                st.subheader("Data Sample with Canonical Company Name")
+                st.dataframe(df_clean[[company_col, 'company_canonical']].head(20))
+
+                # Download button for CSV with canonical names
+                csv = df_clean.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download CSV with Canonical Company Names",
+                    data=csv,
+                    file_name="standardized_and_clustered.csv",
+                    mime="text/csv"
+                )
