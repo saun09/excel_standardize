@@ -3,10 +3,23 @@ import pandas as pd
 import re
 import unicodedata
 from collections import Counter
+import io
+# Add imports for clustering
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.cluster import DBSCAN
+import random
 
-# Sentence Transformers
-from sentence_transformers import SentenceTransformer
-from sklearn.cluster import AgglomerativeClustering
+# Helper function to generate distinct colors
+def generate_colors(n):
+    random.seed(42)
+    colors = []
+    for _ in range(n):
+        colors.append("#"+"".join([random.choice('0123456789ABCDEF') for _ in range(6)]))
+    return colors
+
+def color_clusters(s, cluster_colors):
+    # s is a Series of cluster labels
+    return ['background-color: {}'.format(cluster_colors.get(x, '#FFFFFF')) for x in s]
 
 # Session state initialization
 if "standardized" not in st.session_state:
@@ -58,15 +71,36 @@ def standardize_dataframe(df, string_cols):
         df[col] = df[col].apply(lambda x: standardize_value(x, col_name=col))
     return df
 
-def cluster_with_embeddings(series, threshold=1.5):
-    model = SentenceTransformer('all-MiniLM-L6-v2')
-    embeddings = model.encode(series.fillna("").astype(str).tolist())
-    clustering = AgglomerativeClustering(n_clusters=None, distance_threshold=threshold)
-    labels = clustering.fit_predict(embeddings)
-    return labels
+def infer_common_tokens(series, top_k=15):
+    tokens = []
+    for val in series.dropna():
+        val = re.sub(r'[^\w\s]', '', str(val)).lower()
+        tokens.extend(val.split())
+    counter = Counter(tokens)
+    common_tokens = [tok for tok, count in counter.items() if count > 1]
+    return sorted(common_tokens, key=counter.get, reverse=True)[:top_k]
 
-# --- Streamlit App ---
-st.title("Automatic String Column Standardizer + Smart Semantic Clustering")
+def extract_primary_token(val):
+    if pd.isna(val):
+        return "MISC"
+    val = str(val).lower()
+    val = re.sub(r'[^\w\s]', ' ', val)
+    tokens = val.split()
+    skip_words = {'for', 'in', 'used', 'material', 'industry', 'binder', 'bulk', 'with', 'from'}
+    for tok in tokens:
+        if tok not in skip_words and len(tok) > 2 and any(c.isalpha() for c in tok):
+            return tok.upper()
+    return "MISC"
+
+def tokenize_string(val):
+    if pd.isna(val):
+        return []
+    val = val.lower()
+    val = re.sub(r'[^\w\s]', ' ', val)
+    tokens = val.split()
+    stopwords = {'for', 'in', 'used', 'material', 'industry', 'binder', 'bulk', 'with', 'from'}
+    return [t for t in tokens if t not in stopwords and len(t) > 2]
+st.title("Automatic String Column Standardizer + Token-Based Clustering")
 
 uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
 
@@ -91,22 +125,57 @@ if st.session_state.standardized and st.session_state.df_clean is not None:
     st.dataframe(df_clean.head(10))
 
     string_cols = detect_string_columns(df_clean)
-    selected_col = st.selectbox("Select Column for Smart Clustering", options=string_cols)
+    selected_col = st.selectbox("Select Column for Token-Based Clustering", options=string_cols)
 
-    if st.button("Smart Cluster with Sentence Embeddings"):
-        with st.spinner("Clustering with sentence embeddings..."):
-            df_clean['auto_cluster'] = cluster_with_embeddings(df_clean[selected_col])
+    # Your old token clustering button here (unchanged) ...
 
-            st.subheader("Cluster Summary")
-            st.dataframe(df_clean['auto_cluster'].value_counts().reset_index().rename(columns={'index': 'Cluster', 'auto_cluster': 'Count'}))
+    if st.button("Nuanced Clustering by TF-IDF + DBSCAN"):
+        with st.spinner("Performing nuanced clustering..."):
+            df_clean['tokens_str'] = df_clean[selected_col].apply(lambda x: ' '.join(tokenize_string(x)))
 
-            st.subheader("Data Sample with Cluster Labels")
-            st.dataframe(df_clean[[selected_col, 'auto_cluster']].head(20))
+            vectorizer = TfidfVectorizer()
+            X = vectorizer.fit_transform(df_clean['tokens_str'])
 
-            csv = df_clean.to_csv(index=False).encode('utf-8')
+            clustering_model = DBSCAN(eps=0.5, min_samples=2, metric='cosine')
+            clusters = clustering_model.fit_predict(X)
+
+            df_clean['nuanced_cluster'] = clusters
+
+            st.subheader("Nuanced Cluster Summary")
+            st.dataframe(df_clean['nuanced_cluster'].value_counts().reset_index().rename(columns={'index': 'Cluster', 'nuanced_cluster': 'Count'}))
+
+            st.subheader("Sample Data with Nuanced Cluster Labels")
+            st.dataframe(df_clean[[selected_col, 'nuanced_cluster']].head(20))
+
+
+            st.subheader("Rows Grouped by Nuanced Cluster")
+
+            for cluster_id, group_df in df_clean.groupby('nuanced_cluster'):
+                st.markdown(f"### Cluster {cluster_id} — {len(group_df)} rows")
+                st.dataframe(group_df[[selected_col]].reset_index(drop=True))
+
+            # Prepare colors for clusters
+            unique_clusters = df_clean['nuanced_cluster'].unique()
+            unique_clusters_sorted = sorted(unique_clusters)
+            colors = generate_colors(len(unique_clusters_sorted))
+            cluster_color_map = dict(zip(unique_clusters_sorted, colors))
+
+            # Styling function to color by cluster in the selected column only
+            def highlight_clusters(row):
+                color = cluster_color_map.get(row['nuanced_cluster'], '#FFFFFF')
+                return ['background-color: {}'.format(color) if col == selected_col or col == 'nuanced_cluster' else '' for col in row.index]
+
+            # Apply styling
+            styled_df = df_clean.style.apply(highlight_clusters, axis=1)
+
+            # Export styled excel to bytes buffer
+            towrite = io.BytesIO()
+            styled_df.to_excel(towrite, engine='openpyxl', index=False)
+            towrite.seek(0)
+
             st.download_button(
-                label="Download CSV with Clusters",
-                data=csv,
-                file_name="semantic_clustered.csv",
-                mime="text/csv"
+                label="Download Nuanced Clusters Excel (Colored)",
+                data=towrite,
+                file_name="nuanced_clustered_colored.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
