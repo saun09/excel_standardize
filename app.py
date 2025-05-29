@@ -147,13 +147,6 @@ if st.session_state.standardized and st.session_state.df_clean is not None:
             st.subheader("Sample Data with Nuanced Cluster Labels")
             st.dataframe(df_clean[[selected_col, 'nuanced_cluster']].head(20))
 
-
-            st.subheader("Rows Grouped by Nuanced Cluster")
-
-            for cluster_id, group_df in df_clean.groupby('nuanced_cluster'):
-                st.markdown(f"### Cluster {cluster_id} — {len(group_df)} rows")
-                st.dataframe(group_df[[selected_col]].reset_index(drop=True))
-
             # Prepare colors for clusters
             unique_clusters = df_clean['nuanced_cluster'].unique()
             unique_clusters_sorted = sorted(unique_clusters)
@@ -179,3 +172,37 @@ if st.session_state.standardized and st.session_state.df_clean is not None:
                 file_name="nuanced_clustered_colored.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
+        
+        if st.button("Exact Match Clustering (Group identical values)"):
+            with st.spinner("Performing exact match clustering..."):
+        # Assign the cluster ID as the group label by exact string value in selected_col
+                df_clean['exact_cluster'] = df_clean[selected_col].fillna("MISSING").astype(str)
+
+                st.subheader("Exact Match Cluster Summary")
+                st.dataframe(df_clean['exact_cluster'].value_counts().reset_index().rename(columns={'index': 'Cluster', 'exact_cluster': 'Count'}))
+
+                st.subheader("Sample Data with Exact Match Cluster Labels")
+                st.dataframe(df_clean[[selected_col, 'exact_cluster']].head(20))
+
+        # Generate colors for distinct clusters (limited to 20 distinct colors for performance)
+                unique_clusters = df_clean['exact_cluster'].unique()
+                unique_clusters_sorted = sorted(unique_clusters)
+                colors = generate_colors(min(len(unique_clusters_sorted), 20))
+                cluster_color_map = dict(zip(unique_clusters_sorted, colors))
+
+                def highlight_exact_clusters(row):
+                    color = cluster_color_map.get(row['exact_cluster'], '#FFFFFF')
+                    return ['background-color: {}'.format(color) if col == selected_col or col == 'exact_cluster' else '' for col in row.index]
+
+                styled_df = df_clean.style.apply(highlight_exact_clusters, axis=1)
+
+                towrite = io.BytesIO()
+                styled_df.to_excel(towrite, engine='openpyxl', index=False)
+                towrite.seek(0)
+
+                st.download_button(
+                label="Download Exact Match Clusters Excel (Colored)",
+                data=towrite,
+                file_name="exact_match_clusters_colored.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
