@@ -57,18 +57,8 @@ This Streamlit web application allows users to:
 
 ##  Working Flowchart
 
-```mermaid
-flowchart TD
-    A[Start: Upload CSV] --> B[Select Column for Clustering]
-    B --> C[Set Clustering Params (KMeans, k)]
-    C --> D[Run Clustering]
-    D --> E[Preview Clustered Data]
-    E --> F[Visualize Cluster Stats]
-    F --> G[Generate Excel Report]
-    G --> H[Advanced Cluster Analytics]
-    H --> I[Group-by Aggregation]
-    I --> J[Download Final Output]
-```
+![image](https://github.com/user-attachments/assets/af840978-44ac-4419-bae6-ad2d5a70de7d)
+
 
 ---
 ## Clustering Approach
