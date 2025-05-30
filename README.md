@@ -30,7 +30,7 @@ This Streamlit web application allows users to:
 
 **Step 6: For data analysis:**  
 - Select analysis type: *Cluster Summary / Top Clusters / Cross Analysis / Complete Analysis by Category*  
-  - i) Select the numeric column for calculations (e.g., `quantity`, `unit_price`, etc.)  
+  - i) Select the numeric column for calculations (e.g. `quantity`, `unit_price`, etc.)  
   - ii) Select specific clusters (e.g. `lipolan t`, `lipolan f-2530`, etc.) — can select multiple OR leave blank for full analysis  
 - Click **Download Analysis Results**
 
