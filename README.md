@@ -4,7 +4,18 @@
 A **Streamlit-based data analysis tool** that allows you to **upload CSV files**, **standardize** i.e. preprocess it, perform **clustering** on selected columns, visualize the results, export color-coded Excel files, and **analyze clusters** through interactive dashboards.
 
 ---
+## 📑 Index
 
+1. [What Does It Do?](#what-does-it-do)
+2. [How Does It Work?](#how-does-it-work)
+3. [What Output Will You Get?](#what-output-will-you-get)
+4. [Working Flowchart](#working-flowchart)
+5. [Clustering Approach](#clustering-approach)
+   - [How Clustering Was Done](#how-clustering-was-done)
+   - [Why Not KMeans or DBSCAN?](#why-not-kmeans-or-dbscan)
+   - [Example](#example)
+6. [Code Explanation](#code-explanation)
+---
 ## What Does It Do?
 
 This Streamlit web application allows users to:
