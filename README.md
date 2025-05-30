@@ -83,23 +83,53 @@ flowchart TD
 ### 🔹 app.py
 - **is_email(value)** : checks if a given value is a valid email address using strict regex pattern.
     - It trims whitespace and converts the input to a string.
-    - Uses a regex pattern to match typical email formats
-    - Returns True if the value looks like an email else false
+    - Uses a regex pattern to match typical email formats.
+    - Returns True if the value looks like an email else false.
     - We do this to ensure that email addresses are not standardized, since they are case sensitive.
   
-
- ```python
-email_pattern = re.compile(
-    r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-)
-
-def is_email(value):
-    value = str(value).strip()
-    return bool(email_pattern.match(value))
-<!-- spacer -->
-
-
 - **detect_string_columns(df)** : identifies columns in a dataframe that contain non-numeric and non email text values.
+    - Filters out numeric columns and skips columns containing email.
+    - Ensures column has atleast some alphabetic content.
+    - Returns a list of column names that contains general strings.
+    - We do this to get names of cholumns that have to be preprocessed. 
+
+  - **detect_numeric_columns(df)** : detects columns that are either numeric like or contain numeric like strings ex: Rs1000.
+      - Directly includes numeric dtype columns.
+      - For non numeric columns : clean them (remove symbols) , and check if 70%+ can be converted to float.
+      - Returns list of numeric like columns.
+      - We do this to get definite column names to work on in the analytical insights section.
+
+  - **detect_categorical_columns(df, exclude_clusters=True)** : finds columns that are used for categorical grouping.
+      - skips numeric columns.
+      - check the columns unique value ratio.
+      - returns list of categorical columns.
+      - We do this to get column names to work on in the group by insights section.
+   
+  - **safe_numeric_conversion(series)**: converts Pandas Series to numeric values ; handling formatting issues
+      - replaces non numeric characters like " , , $ " and converts to float
+      - NaN values become 0
+      - Returns a clean numeric series
+      - 
+  -**clean_pin(value)**: Cleans and extracts 6 digit PIN codes from strings
+      - removes prefixes like "pin-"
+      - finds first 6 digit number using regex
+      - returns cleaned PIN or original if not found
+
+  - **standardize_value(val,col_name="")**: standardizes string values for consistency(lowercase/no accents/ clean spaces etc.)
+      - if column name includes "pin" , apply clean_pin()
+      - normalizes unicode characters
+      - converts to lowercase and strips extra whitespace
+   
+  - **standardize_dataframe(df, string_cols)**: standardizes select text columns across a dataframe
+      - applies standardize_value() to each value in specified column
+      - 
+  - **group_data(df, group_by_columns, aggregation_rules=None)** : groups a dataFrame by one or more columns with optional aggregration logic (for the group by insights section)
+   
+  -**extract_core_product_name(text)** : Extracts a base product name and any product codes from a text string.
+      - Extracts code using regex
+      - removes parantesis content but retains product name
+      - construcrs a clean product identifier
+      - We do this to cluster related products
   
 
 ---
