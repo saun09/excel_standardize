@@ -15,8 +15,6 @@ This Streamlit web application allows users to:
 -Conduct various types of cluster-based data analytics
 -Group data across categorical columns for insights
 
-
-
 ---
 ## How Does It Work?
 
@@ -38,7 +36,6 @@ This Streamlit web application allows users to:
 - i) Select columns to group by (multiple allowed)  
 - ii) Select columns to aggregate over (like count/sum, etc. — *optional*)  
 - iii) Click on the **Group Data** button to get the final grouped table
-
 
 ---
 
@@ -73,6 +70,60 @@ flowchart TD
     I --> J[Download Final Output]
 ```
 
+---
+## Clustering Approach
+
+This project performs **product name clustering** to group similar or equivalent items that may have inconsistent or messy naming conventions. The goal is to improve analysis accuracy and simplify reporting by consolidating variants of the same product under a common label.
+
+### How Clustering Was Done
+
+I used a **custom hybrid approach** that combines:
+
+1. **Rule-Based Preprocessing**:
+   - Extracts the **core product name** from each entry using a custom parser.
+   - Preserves important identifiers like **product codes** (e.g.`AR-740`, `PQ0015066`) before removing less relevant parts (e.g. descriptions in parentheses).
+
+2. **Fuzzy Matching via String Similarity**:
+   - We use Python's `SequenceMatcher` from the `difflib` module to compute the **similarity score** between product names.
+   - A **similarity threshold (default: 0.8)** is used to decide whether two product names should be grouped into the same cluster.
+
+3. **Dictionary-Based Clustering**:
+   - After extracting normalized core names, we map each original product name to a **cluster label** (core name with the most specific code).
+   - This avoids over-generalization and ensures product uniqueness is preserved.
+
+The result is a new column (e.g. `product_name_cluster`) where similar variants are grouped under a standardized label.
+
+---
+
+### Why Not KMeans or DBSCAN?
+
+I chose this rule-based string similarity method instead of traditional clustering algorithms like **KMeans** or **DBSCAN** for the following reasons:
+
+| Limitation            | KMeans / DBSCAN                              | Our Approach                                  |
+|-----------------------|----------------------------------------------|-----------------------------------------------|
+| **Data Type**         | Requires numeric vectors                     | Works directly with raw strings               |
+| **Text Semantics**    | Cannot inherently understand product codes   | Product codes are preserved and emphasized    |
+| **Feature Engineering**| Requires complex vectorization (e.g., TF-IDF) | No need for external vectorization            |
+| **Clustering Control**| No control over cluster names or meaning     | Full control via rule-based mapping           |
+| **Interpretability**  | Cluster labels are abstract (e.g. cluster_1)| Cluster labels are meaningful (e.g. `lipolan f AR-740`) |
+
+In short, **textual product data** needs **semantic understanding**, not just geometric distance in vector space. My method allows for **greater flexibility, domain control, and interpretability**, which is essential for product-centric datasets.
+
+---
+
+### Example
+
+| Raw Product Name                   | Cluster Label         |
+|-----------------------------------|------------------------|
+| `Lipolan F (AR-740)`              | `lipolan f AR-740`     |
+| `Lipolan F AR740`                 | `lipolan f AR-740`     |
+| `LIPOLAN F (PQ0015066)`           | `lipolan f PQ0015066`  |
+| `ACM (Sample Product)`            | `acm`                  |
+
+This clustered output is then used for:
+- Summary statistics
+- Cluster-wise Excel exports
+- Category-wise breakdowns
 ---
 
 ## Code Explanation
