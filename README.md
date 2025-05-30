@@ -21,15 +21,15 @@ This Streamlit web application allows users to:
 
 ## ⚙️ How Does It Work?
 
-Step 1: Upload your CSV file (click on the browse files and upload button)
-Step 2: Click on the **Standardize String Columns** button to preprocess the data(i.e. lowercase/pin code formatting/ space removal, etc.)
-Step 3: You can download the **Standardized CSV** file now
-Step 4: Choose a column for clustering your information over (i.e. item_description ) , click on the **create clusters** button.
-Step 5: You can download the Data with Clusters as CSV Or click the **Generate Color-Coded Excel** Button where each cluster is color coded and grouped together for better visualization
-Step 6: For data analysis, select analysis type [Cluster Summary/Top Clusters/Cross Analysis/Complete Analysis by category] 
+-Step 1: Upload your CSV file (click on the browse files and upload button)
+-Step 2: Click on the **Standardize String Columns** button to preprocess the data(i.e. lowercase/pin code formatting/ space removal, etc.)
+-Step 3: You can download the **Standardized CSV** file now
+-Step 4: Choose a column for clustering your information over (i.e. item_description ) , click on the **create clusters** button.
+-Step 5: You can download the Data with Clusters as CSV Or click the **Generate Color-Coded Excel** Button where each cluster is color coded and grouped together for better visualization
+-Step 6: For data analysis, select analysis type [Cluster Summary/Top Clusters/Cross Analysis/Complete Analysis by category] 
     i) then select the numeric column for calculations [ i.e. quantity/ unit_price etc.]
     ii) next, select specific clusters (i.e. lipolan t , lipolan f-2530 etc) - can select multiple OR leave blank for all analysis -> Download Analysis Results
-Step 7: Data grouping: for categorical columns- Select columns to group by(multiple) 
+-Step 7: Data grouping: for categorical columns- Select columns to group by(multiple) 
     i) then select columns to aggregate over(like count/sum etc. - OPTIONAL)
     ii) next, click on **group data** button to get table.
 
