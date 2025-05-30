@@ -129,8 +129,63 @@ flowchart TD
       - Extracts code using regex
       - removes parantesis content but retains product name
       - construcrs a clean product identifier
-      - We do this to cluster related products
-  
+      - Real world datasets contain extra info like paranthesis. We use this functon to standardize such data for clustering.
+
+- **similarity_score(str1, str2)** : Measures how similar 2 strings are (0 to 1)
+    - Uses difflib.SequenceMatcher
+    - returns a similarity score where 1 means identical strings
+    - We use this for detecting near duplicates ; further helping in clustering
+
+- **cluster_product_names(series, similarity_threshold = 0.8)** :  Clusters similar product names together by extracting a common base name and grouping variants under one label.
+    - Extracts core product names using extract_core_product_name
+    - maps each value in the series to its core version
+    - returns series with grouped cluster names
+    - We use this function to reduce noisy product name variations into standardized groups 
+
+- **add_cluster_column(df,column_name)** : Adds a new column to the dataFrame with clustered names derived from the original column.
+    - calls cluster_product_names() on specified column
+    - creates a new column like product_name_cluster
+    - We use this to visualise the grouped identifiers for similar products
+ 
+- **generate_colors(n)** : Generates a list of n distinct hex color codes to represent different product clusters for data readability and visualization
+
+- **create_colored_excel(df, cluster_column)** : Exports clustered Dataframe to an Excel file where each row is color-coded by cluster.
+    - sorts dataFrame by cluster
+    - assigns unique color to each cluster
+    - applies colors row-wise
+    - adds summary sheet showing count and color per cluster
+
+- **perform_cluster_analysis(df, cluster_col, analysis_type, target_col=None, group_by_col=None, selected_clusters=None)** : Analytical Insights section
+   - Performs high-level summaries and breakdowns of clustered data, supporting multiple types of analysis.
+    Supported Analysis Types:
+   - cluster_summary: Count, sum, and mean for each cluster.
+   - top_clusters: Top 10 clusters based on a numeric field.
+   - cluster_by_category: Cross-tab between clusters and a category (e.g., product type, region).
+   - detailed_breakdown: Deep dive into each cluster by category with record counts and sums.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ---
 
