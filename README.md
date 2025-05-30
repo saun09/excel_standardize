@@ -19,12 +19,12 @@ A **Streamlit-based data analysis tool** that allows you to **upload CSV files**
 ## What Does It Do?
 
 This Streamlit web application allows users to:
--Upload and clean raw Excel/CSV data
--Standardize messy string columns (like names / product descriptions / company names / PIN code etc.)
--Perform clustering based on any chosen column
--Generate color-coded Excel files with clusters grouped visually
--Conduct various types of cluster-based data analytics
--Group data across categorical columns for insights
+- Upload and clean raw Excel/CSV data  
+- Standardize messy string columns (like names / product descriptions / company names / PIN code etc.)  
+- Perform clustering based on any chosen column  
+- Generate color-coded Excel files with clusters grouped visually  
+- Conduct various types of cluster-based data analytics  
+- Group data across categorical columns for insights  
 
 ---
 ## How Does It Work?
