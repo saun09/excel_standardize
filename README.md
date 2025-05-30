@@ -82,7 +82,11 @@ flowchart TD
 
 ### 🔹 app.py
 - **is_email(value)** : checks if a given value is a valid email address using strict regex pattern.
-    It trims whitespace and converts the input to a string.
+    - It trims whitespace and converts the input to a string.
+    - Uses a regex pattern to match typical email formats
+    - Returns True if the value looks like an email else false
+    - We do this to ensure that email addresses are not standardized, since they are case sensitive.
+  
 
  ```python
 email_pattern = re.compile(
@@ -92,8 +96,11 @@ email_pattern = re.compile(
 def is_email(value):
     value = str(value).strip()
     return bool(email_pattern.match(value))
+<!-- spacer -->
 
 
+- **detect_string_columns(df)** : identifies columns in a dataframe that contain non-numeric and non email text values.
+  
 
 ---
 
