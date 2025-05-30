@@ -18,9 +18,7 @@ This Streamlit web application allows users to:
 
 
 ---
-
 ## How Does It Work?
-
 
 **Step 1:** Upload your CSV file (click on the **Browse Files and Upload** button)  
 **Step 2:** Click on the **Standardize String Columns** button to preprocess the data (i.e., lowercase/pin code formatting/space removal, etc.)  
@@ -32,14 +30,15 @@ This Streamlit web application allows users to:
 
 **Step 6: For data analysis:**  
 - Select analysis type: *Cluster Summary / Top Clusters / Cross Analysis / Complete Analysis by Category*  
-  i) Select the numeric column for calculations (e.g., `quantity`, `unit_price`, etc.)  
-  ii) Select specific clusters (e.g. `lipolan t`, `lipolan f-2530`, etc.) — can select multiple OR leave blank for full analysis  
+  - i) Select the numeric column for calculations (e.g., `quantity`, `unit_price`, etc.)  
+  - ii) Select specific clusters (e.g. `lipolan t`, `lipolan f-2530`, etc.) — can select multiple OR leave blank for full analysis  
 - Click **Download Analysis Results**
 
 **Step 7: Data Grouping (for categorical columns):**  
-  i) Select columns to group by (multiple allowed)  
-  ii) Select columns to aggregate over (like count/sum, etc. — *optional*)  
-  iii) Click on the **Group Data** button to get the final grouped table  
+- i) Select columns to group by (multiple allowed)  
+- ii) Select columns to aggregate over (like count/sum, etc. — *optional*)  
+- iii) Click on the **Group Data** button to get the final grouped table
+
 
 ---
 
