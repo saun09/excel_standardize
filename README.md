@@ -3,6 +3,7 @@
 
 A **Streamlit-based data analysis tool** that allows you to **upload CSV files**, **standardize** i.e. preprocess it, perform **clustering** on selected columns, visualize the results, export color-coded Excel files, and **analyze clusters** through interactive dashboards.
 
+Deployed here: https://excelstandardizeinsights.streamlit.app/
 ---
 ## 📑 Index
 
