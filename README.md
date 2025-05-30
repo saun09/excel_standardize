@@ -46,19 +46,17 @@ This Streamlit web application allows users to:
 ##  What Output Will You Get?
 
 - **Excel Output**:
-  - Sheet 1: Standardized CSV   
-  - Sheet 2: Clustered data CSV
+  - Sheet 1: Standardized CSV  
+  - Sheet 2: Clustered data CSV  
   - Sheet 3: Color-coded by cluster.
- 
+
 - **Interactive Outputs**:
   - Downloadable Insights from Analysis:
-    Choose your Analysis Type:
-    **Cluster Summary**: Total records, sums, averages
-    **Top Clusters**: Clusters with highest metrics
-    **Cross Analysis**: Compare two cluster variables
-    **Complete Analysis by Category**: Full view based on selected input
-  - Group-by stats with aggregation-This allows you to summarize and analyze data by categories with custom aggregations.
-
+    - **Cluster Summary**: Total records, sums, averages  
+    - **Top Clusters**: Clusters with highest metrics  
+    - **Cross Analysis**: Compare two cluster variables  
+    - **Complete Analysis by Category**: Full view based on selected input
+  - Group-by stats with aggregation - This allows you to summarize and analyze data by categories with custom aggregations.
 ---
 
 ##  Working Flowchart
